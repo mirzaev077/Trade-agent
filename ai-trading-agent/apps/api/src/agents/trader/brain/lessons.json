@@ -1,0 +1,157 @@
+{
+  "lessons": [
+    {
+      "warning": "BUY in PREMIUM zone \u2014 past losses show poor success rate here",
+      "conditions": {
+        "direction": "buy",
+        "pd_zone": "premium"
+      },
+      "count": 9,
+      "created": "2026-04-17T16:31:00.439991"
+    }
+  ],
+  "history": [
+    {
+      "direction": "buy",
+      "confluence_score": 6.9,
+      "session": "off_hours",
+      "pd_zone": "premium",
+      "mmxm": "bullish_distribution",
+      "sl_pips": 19.989999999997963,
+      "pnl": 0,
+      "time": "2026-04-17T16:31:00.441527"
+    },
+    {
+      "direction": "buy",
+      "confluence_score": 6.9,
+      "session": "off_hours",
+      "pd_zone": "premium",
+      "mmxm": "bullish_distribution",
+      "sl_pips": 18.82999999999811,
+      "pnl": 0,
+      "time": "2026-04-17T16:31:00.443488"
+    },
+    {
+      "direction": "buy",
+      "confluence_score": 6.9,
+      "session": "off_hours",
+      "pd_zone": "premium",
+      "mmxm": "bullish_distribution",
+      "sl_pips": 17.33999999999469,
+      "pnl": 0,
+      "time": "2026-04-17T16:31:00.444906"
+    },
+    {
+      "direction": "buy",
+      "confluence_score": 7.4,
+      "session": "off_hours",
+      "pd_zone": "premium",
+      "mmxm": "bullish_distribution",
+      "sl_pips": 22.93999999999869,
+      "pnl": 0,
+      "time": "2026-04-17T16:34:57.220647"
+    },
+    {
+      "direction": "buy",
+      "confluence_score": 7.4,
+      "session": "off_hours",
+      "pd_zone": "premium",
+      "mmxm": "bullish_distribution",
+      "sl_pips": 19.639999999999418,
+      "pnl": 0,
+      "time": "2026-04-17T16:34:57.223574"
+    },
+    {
+      "direction": "buy",
+      "confluence_score": 7.4,
+      "session": "off_hours",
+      "pd_zone": "premium",
+      "mmxm": "bullish_distribution",
+      "sl_pips": 19.639999999999418,
+      "pnl": 0,
+      "time": "2026-04-17T16:34:57.226174"
+    },
+    {
+      "direction": "buy",
+      "confluence_score": 7.4,
+      "session": "off_hours",
+      "pd_zone": "premium",
+      "mmxm": "bullish_distribution",
+      "sl_pips": 18.06999999999789,
+      "pnl": 0,
+      "time": "2026-04-17T16:42:31.859958"
+    },
+    {
+      "direction": "buy",
+      "confluence_score": 7.4,
+      "session": "off_hours",
+      "pd_zone": "premium",
+      "mmxm": "bullish_distribution",
+      "sl_pips": 18.659999999999854,
+      "pnl": 0,
+      "time": "2026-04-17T16:42:31.861754"
+    },
+    {
+      "direction": "buy",
+      "confluence_score": 7.4,
+      "session": "off_hours",
+      "pd_zone": "premium",
+      "mmxm": "bullish_distribution",
+      "sl_pips": 18.659999999999854,
+      "pnl": 0,
+      "time": "2026-04-17T16:42:31.863600"
+    },
+    {
+      "direction": "buy",
+      "confluence_score": 7.1,
+      "session": "off_hours",
+      "pd_zone": "discount",
+      "mmxm": "bullish_distribution",
+      "sl_pips": 49.979999999995925,
+      "pnl": 0,
+      "time": "2026-04-20T16:03:00.189276"
+    },
+    {
+      "direction": "buy",
+      "confluence_score": 7.1,
+      "session": "off_hours",
+      "pd_zone": "discount",
+      "mmxm": "bullish_distribution",
+      "sl_pips": 49.979999999995925,
+      "pnl": 0,
+      "time": "2026-04-20T16:03:00.191643"
+    },
+    {
+      "direction": "buy",
+      "confluence_score": 7.1,
+      "session": "off_hours",
+      "pd_zone": "discount",
+      "mmxm": "bullish_distribution",
+      "sl_pips": 49.979999999995925,
+      "pnl": 0,
+      "time": "2026-04-20T16:03:00.193784"
+    },
+    {
+      "direction": "buy",
+      "confluence_score": 7.1,
+      "session": "off_hours",
+      "pd_zone": "discount",
+      "mmxm": "bullish_distribution",
+      "sl_pips": 50.01999999999498,
+      "pnl": 0,
+      "time": "2026-04-20T16:32:36.704657"
+    },
+    {
+      "direction": "buy",
+      "confluence_score": 7.1,
+      "session": "off_hours",
+      "pd_zone": "discount",
+      "mmxm": "bullish_distribution",
+      "sl_pips": 50.01999999999498,
+      "pnl": 0,
+      "time": "2026-04-20T16:52:44.255822"
+    }
+  ],
+  "wins": 0,
+  "losses": 14
+}

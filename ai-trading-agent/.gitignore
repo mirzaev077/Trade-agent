@@ -1,0 +1,12 @@
+# F0-1: Restart safety state — runtime artifacts
+# trade_meta.json va tempfile'lar diskka yoziladi, lekin git'ga commit qilinmaydi.
+data/state/
+apps/data/state/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Tempfile during atomic save_trade_meta
+.trade_meta_*.json

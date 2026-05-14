@@ -1,0 +1,54 @@
+# ─── Credentials va sirlar (KRITIK) ────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.env
+!.env.example
+**/credentials.json
+**/secrets.json
+*.pem
+*.key
+
+# ─── Claude Code session fayllari ──────────────────────────────────
+.claude/
+
+# ─── Python ────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+*.egg
+
+# ─── Virtual env ───────────────────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ─── F0-1: Runtime state (har tick'da yoziladi, history shart emas) ─
+data/state/
+apps/data/state/
+ai-trading-agent/data/state/
+ai-trading-agent/apps/data/state/
+.trade_meta_*.json
+
+# ─── IDE ──────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ─── Logs ─────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ─── OS ───────────────────────────────────────────────────────────
+Thumbs.db
+Desktop.ini

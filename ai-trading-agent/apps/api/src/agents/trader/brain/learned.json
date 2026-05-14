@@ -1,0 +1,56 @@
+{
+  "trades": [
+    {
+      "ts": "2026-05-07T05:23:38.891192",
+      "entry_type": "RB",
+      "tf": "H4",
+      "session": "asia",
+      "day": "thursday",
+      "session_day_key": "asia_thursday",
+      "direction": "buy",
+      "sl_pips": 50.0,
+      "tp_pips": 100.0,
+      "result": "win",
+      "pnl": 30.0,
+      "mode": "FLOW",
+      "regime": "chop"
+    }
+  ],
+  "adapted": {
+    "setup_weights": {
+      "OB": 1.0,
+      "FVG": 1.0,
+      "BB": 1.0,
+      "OTE": 1.0,
+      "IFVG": 1.0,
+      "BISI": 1.0,
+      "SIBI": 1.0,
+      "BPR": 1.0,
+      "PDH": 1.0,
+      "PDL": 1.0,
+      "CRT": 1.0,
+      "NWOG": 1.0,
+      "AR_HI": 1.0,
+      "AR_LO": 1.0,
+      "Open": 1.0,
+      "LiqVoid": 0.9,
+      "BOS_S": 0.9,
+      "CISD": 0.9
+    },
+    "entry_pct": 0.3,
+    "sl_multiplier": 1.0,
+    "disabled": [],
+    "session_weights": {}
+  },
+  "stats": {
+    "total": 1,
+    "last_analysis_at": 0,
+    "last_evolution_at": 0
+  },
+  "session_day_stats": {
+    "asia_thursday": {
+      "wins": 1,
+      "losses": 0
+    }
+  }
+}

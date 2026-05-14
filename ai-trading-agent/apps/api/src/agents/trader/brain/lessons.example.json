@@ -1,0 +1,42 @@
+{
+  "_schema_doc": {
+    "description": "lessons.json — inson tomonidan qo'lda boshqariladigan hard-override fayli. Self-learner avtomatik o'zgartirmaydi.",
+    "fields": {
+      "lessons[]": "List of lesson entries. Ikki xil format qo'llab-quvvatlanadi:",
+      "lessons[].warning_format": {
+        "purpose": "Eski format — AI brain prompt'iga ogohlantirish sifatida uzatiladi (read-only).",
+        "fields": ["warning (str)", "conditions (dict)", "count (int)", "created (ISO datetime)"]
+      },
+      "lessons[].action_format": {
+        "purpose": "Yangi format — self-learner xulq-atvorini hard-override qiladi.",
+        "fields": ["setup (str, masalan 'RB', 'OB', 'FVG')", "action (str, qabul qilingan: 'disable')", "reason (str, ixtiyoriy)", "created (ISO datetime, ixtiyoriy)"],
+        "accepted_actions": ["disable"]
+      },
+      "history[]": "Trade tarixi snapshot'i (eski format, self-learner tomonidan yoziladi).",
+      "wins": "Win counter (int).",
+      "losses": "Loss counter (int)."
+    },
+    "priority": "lessons.json `action: disable` > learned.json `adapted.disabled` > learned.json `adapted.setup_weights`",
+    "mtime_cache": "self_learner.py lessons.json mtime'ni kuzatadi — fayl o'zgarganda avtomatik qayta yuklanadi (har get_setup_weight() chaqiruvida emas)."
+  },
+  "lessons": [
+    {
+      "warning": "BUY in PREMIUM zone — past losses show poor success rate here",
+      "conditions": {
+        "direction": "buy",
+        "pd_zone": "premium"
+      },
+      "count": 9,
+      "created": "2026-04-17T16:31:00.439991"
+    },
+    {
+      "setup": "RB",
+      "action": "disable",
+      "reason": "Rejection blocks 30 ta tradeda 12% win rate berdi — qo'lda o'chirildi",
+      "created": "2026-05-14T00:00:00.000000"
+    }
+  ],
+  "history": [],
+  "wins": 0,
+  "losses": 0
+}
