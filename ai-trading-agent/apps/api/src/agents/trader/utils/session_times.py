@@ -1,5 +1,8 @@
-from datetime import datetime, time
+from datetime import time
 import pytz
+
+# F2-1: clock injection — backtest VirtualClock yoki RealClock'dan vaqt o'qiladi
+from apps.api.src.agents.trader.core.clock import get_clock
 
 
 UTC = pytz.UTC
@@ -17,7 +20,7 @@ KILL_ZONES = ["asia", "london", "overlap", "newyork"]
 
 
 def get_current_session() -> str:
-    now = datetime.utcnow().time()
+    now = get_clock().now().time()
     if time(13, 0) <= now <= time(16, 0):
         return "overlap"
     if time(8, 0) <= now < time(13, 0):
@@ -36,7 +39,7 @@ def is_kill_zone() -> bool:
 
 
 def is_weekend_protection() -> bool:
-    now = datetime.utcnow()
+    now = get_clock().now()
     if now.weekday() == 4 and now.hour >= 22:
         return True
     if now.weekday() in (5, 6):

@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openclaw-trader"
+version = "0.1.0"
+description = "OpenClaw — MetaTrader 5 ICT/MMXM trading bot with Claude validation"
+requires-python = ">=3.11"
+readme = "README.md"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-mock>=3.12",
+    "freezegun>=1.4",
+    "ruff>=0.4.0",
+]
+
+# ───────────────────────────── Pytest ──────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "needs_mt5: requires real MetaTrader5 terminal (skipped in CI)",
+]
+
+# ───────────────────────────── Ruff ────────────────────────────────
+# Hozirgi maqsad: yangi kod uchun guardrail. Eski kodda 36+ ta
+# `datetime.utcnow()` chaqiruvi bor (F2-1 fazasida tuzatiladi).
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+extend-exclude = [
+    "data/",
+    "scripts/test_f0/",   # F0 ad-hoc testlar (legacy formatting)
+    "**/__pycache__/",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "F",     # pyflakes
+    "DTZ",   # flake8-datetimez (timezone-aware datetime majburlash)
+]
+# Project style decisions — qabul qilingan formatlar:
+ignore = [
+    "E501",  # line-too-long — line-length 110 chiroyli ko'rsatadi, harf bilan emas
+    "E731",  # lambda assignment — agent.py'da mavjud
+    "E701",  # multiple statements on one line — agent.py va ict.py inline `if x: stmt` style
+    "E702",  # statement on same line — yuqoridagiga juft
+    "E741",  # ambiguous variable name (l, I, O) — agent.py'da local var sifatida
+    "F841",  # unused local — agent.py quality flags (mmxm_ok, kz_ok, ...) hozir o'qilmaydi (F2 da)
+]
+
+# Baseline (2026-05-14, F1-5):
+#   • DTZ003/011/901 (40 ta) — F2-1 fazasida `datetime.utcnow()` → tz-aware migratsiya
+#   • F401 (re-exports __init__.py) — `__all__` keyingi cleanup'da
+#   • Boshqa hammasi — toza
+
+[tool.ruff.lint.per-file-ignores]
+# Test fayllar va scripts — DTZ + E402 (sys.path injection)
+"scripts/**"        = ["DTZ", "E402"]
+"tests/**"          = ["DTZ", "E402"]
+"apps/api/main.py"  = ["E402"]  # sys.path setup .env load'dan oldin shart

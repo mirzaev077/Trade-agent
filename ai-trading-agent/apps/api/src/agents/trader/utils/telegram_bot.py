@@ -5,7 +5,6 @@ Xato bo'lsa jimgina o'tkazib yuboradi (trading to'xtatilmaydi).
 """
 import os
 import json
-import asyncio
 import urllib.request
 import urllib.error
 from loguru import logger
@@ -97,6 +96,35 @@ async def notify_daily_target(pnl_pct: float, pnl_usd: float):
         f"Foyda: <b>+{pnl_pct:.1f}%</b> (${pnl_usd:.2f})\n"
         f"<i>Bugungi trading yakunlandi.</i>"
     )
+
+
+async def notify_pending_adjustment(
+    param: str,
+    old_value,
+    new_value,
+    reason: str,
+    adjustment_id: str,
+):
+    """Self-learner parametr o'zgartirishni taklif qildi — admin approval kerak."""
+    def _fmt(v):
+        if v is None:
+            return "—"
+        try:
+            return f"{float(v):.4f}".rstrip("0").rstrip(".")
+        except (TypeError, ValueError):
+            return str(v)
+
+    reason_short = (reason or "")[:200]
+    msg = (
+        f"⏳ <b>PENDING ADJUSTMENT</b>\n"
+        f"Param: <b>{_html_escape(str(param))}</b>\n"
+        f"Old: <b>{_fmt(old_value)}</b> → New: <b>{_fmt(new_value)}</b>\n"
+        f"Sabab: <i>{_html_escape(reason_short)}</i>\n"
+        f"ID: <code>{adjustment_id}</code>\n"
+        f"<i>24 soat ichida approve/reject qiling:</i>\n"
+        f"<code>python -m apps.api.src.tools.admin_cli approve {adjustment_id}</code>"
+    )
+    await send(msg)
 
 
 async def notify_status(symbol: str, mode: str, want: str,
@@ -237,3 +265,35 @@ def notify_shutdown(reason: str) -> None:
         _send_sync(msg)
     except Exception as e:  # noqa: BLE001
         logger.error(f"[notify_shutdown] xato: {e}")
+
+
+def notify_pending_adjustment_sync(
+    param: str,
+    old_value,
+    new_value,
+    reason: str,
+    adjustment_id: str,
+) -> None:
+    """Sync variant — self_learner (sync) ichidan chaqirish uchun."""
+    try:
+        def _fmt(v):
+            if v is None:
+                return "—"
+            try:
+                return f"{float(v):.4f}".rstrip("0").rstrip(".")
+            except (TypeError, ValueError):
+                return str(v)
+
+        reason_short = _html_escape((reason or "")[:200])
+        msg = (
+            f"⏳ <b>PENDING ADJUSTMENT</b>\n"
+            f"Param: <b>{_html_escape(str(param))}</b>\n"
+            f"Old: <b>{_fmt(old_value)}</b> → New: <b>{_fmt(new_value)}</b>\n"
+            f"Sabab: <i>{reason_short}</i>\n"
+            f"ID: <code>{adjustment_id}</code>\n"
+            f"<i>24 soat ichida approve/reject qiling:</i>\n"
+            f"<code>python -m apps.api.src.tools.admin_cli approve {adjustment_id}</code>"
+        )
+        _send_sync(msg)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"[notify_pending_adjustment_sync] xato: {e}")

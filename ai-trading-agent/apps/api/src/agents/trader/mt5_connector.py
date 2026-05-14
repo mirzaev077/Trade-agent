@@ -4,6 +4,7 @@ import time
 from datetime import datetime, timezone
 from loguru import logger
 from typing import Optional
+from .core.clock import get_clock
 from .models.orders import TradeOrder, OrderResult
 from .utils.timeframes import get_mt5_tf
 
@@ -387,14 +388,14 @@ class MT5Connector:
                 retcode=10009, symbol=symbol, direction=direction,
             )
 
-        from datetime import datetime, timedelta
+        from datetime import timedelta
         sym_info = mt5.symbol_info(symbol)
         if sym_info is None:
             raise MT5ConnectorError(f"Symbol not found: {symbol}")
         if not sym_info.visible:
             mt5.symbol_select(symbol, True)
 
-        expiry_ts  = int((datetime.utcnow() + timedelta(hours=expiry_hours)).timestamp()) if expiry_hours > 0 else 0
+        expiry_ts  = int((get_clock().now() + timedelta(hours=expiry_hours)).timestamp()) if expiry_hours > 0 else 0
 
         stops_lvl  = max(sym_info.trade_stops_level, 10)
         freeze_lvl = getattr(sym_info, "trade_freeze_level", 0) or 0
@@ -535,8 +536,8 @@ class MT5Connector:
         """Yopilgan pozitsiyaning PnL ma'lumotini olish (history deals)."""
         if self._sim_mode:
             return None
-        from datetime import datetime, timedelta
-        date_to   = datetime.utcnow() + timedelta(hours=1)
+        from datetime import timedelta
+        date_to   = get_clock().now() + timedelta(hours=1)
         date_from = date_to - timedelta(days=30)
         deals = mt5.history_deals_get(date_from, date_to)
         if deals is None:
@@ -560,8 +561,8 @@ class MT5Connector:
         """Bugungi yopilgan tradelar (daily PnL hisoblash uchun)."""
         if self._sim_mode:
             return []
-        from datetime import datetime, timedelta
-        date_to   = datetime.utcnow() + timedelta(hours=1)
+        from datetime import timedelta
+        date_to   = get_clock().now() + timedelta(hours=1)
         date_from = date_to - timedelta(days=days)
         deals = mt5.history_deals_get(date_from, date_to)
         if deals is None:
@@ -583,7 +584,8 @@ class MT5Connector:
         from datetime import datetime, timedelta
 
         np.random.seed(42)
-        dates = [datetime.utcnow() - timedelta(minutes=15 * i) for i in range(count, 0, -1)]
+        # Sim mode fake candles — wall clock OK (sim test fixture, not backtest path)
+        dates = [datetime.now(timezone.utc) - timedelta(minutes=15 * i) for i in range(count, 0, -1)]
         price = 3300.0
         rows = []
         for d in dates:

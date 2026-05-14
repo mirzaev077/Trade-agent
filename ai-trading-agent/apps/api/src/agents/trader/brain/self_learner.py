@@ -19,11 +19,36 @@ lessons.json schema (backward compatible):
 Inson `lessons.json` ga `{"setup": "RB", "action": "disable"}` yozsa,
 self-learner avtomatik weight evolution orqali bu setup'ni qayta yoqa olmaydi —
 `get_setup_weight()` har doim 0.0 qaytaradi.
+
+F1-1 — Admin approval gate:
+  AUTO_APPLY_LEARNING env flag default `false`. False bo'lganda analyze() va
+  evolve() learned.json'ning `adapted/*` qismini to'g'ridan-to'g'ri o'zgartirmaydi —
+  o'rniga `pending_adjustments` jadvaliga propose yozadi va admin'ga Telegram
+  xabar yuboradi. Admin `tools/admin_cli.py approve` orqali tasdiqlaganda
+  learned.json yangilanadi. AUTO_APPLY_LEARNING=true bo'lsa eski xulq saqlanadi
+  (legacy direct-mutate).
 """
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from loguru import logger
+
+# F1-1 imports — DB approval gate va Telegram notify
+try:
+    from apps.api.src.agents.trader.state import db as _db
+except Exception:  # noqa: BLE001 — paket yo'qligida self-learner sinmasin
+    _db = None  # type: ignore
+try:
+    from apps.api.src.agents.trader.utils import telegram_bot as _tg
+except Exception:  # noqa: BLE001
+    _tg = None  # type: ignore
+
+
+def _auto_apply_enabled() -> bool:
+    """Har chaqiruvda env'ni o'qiydi (test'larda monkeypatch oson)."""
+    return os.getenv("AUTO_APPLY_LEARNING", "false").strip().lower() in (
+        "true", "1", "yes", "on"
+    )
 
 
 _DEFAULT_WEIGHTS = {
@@ -75,6 +100,13 @@ class SelfLearner:
         self._refresh_disabled_setups()  # initial load
 
         self.data = self._load()
+
+        # F1-1 — DB init (idempotent). Crash bermaslik shart.
+        if _db is not None:
+            try:
+                _db.init_db()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"SelfLearner: db.init_db() xato — {e}")
 
     # ── Persistence ───────────────────────────────────────────────
 
@@ -152,11 +184,115 @@ class SelfLearner:
         return copy.deepcopy(_DEFAULT_DATA)
 
     def _save(self):
+        """
+        F1-1: AUTO_APPLY_LEARNING=false bo'lganda `adapted/*` qismini admin_cli
+        boshqaradi. Bu metod faqat `trades`/`stats`/`session_day_stats` yozadi,
+        `adapted/*` diskdagi holatdan o'qib merge qilinadi — bot self_learner
+        eski cache bilan admin'ning approve qilgan o'zgarishini ezib yubormaydi.
+        """
         try:
+            if not _auto_apply_enabled() and os.path.exists(self.path):
+                try:
+                    with open(self.path, "r", encoding="utf-8") as f:
+                        on_disk = json.load(f)
+                    if isinstance(on_disk, dict) and "adapted" in on_disk:
+                        # In-memory cache'ni ham yangilaymiz — keyingi get_setup_weight()
+                        # admin yangiliklarini ko'radi
+                        self.data["adapted"] = on_disk["adapted"]
+                except Exception as e:  # noqa: BLE001
+                    logger.debug(f"SelfLearner _save: adapted reload skip — {e}")
+
             with open(self.path, "w", encoding="utf-8") as f:
                 json.dump(self.data, f, indent=2, ensure_ascii=False)
         except Exception as e:
             logger.warning(f"SelfLearner save error: {e}")
+
+    # ── F1-1: Approval gate helpers ───────────────────────────────
+
+    def _propose_or_apply(self, param: str, old_value, new_value, reason: str) -> None:
+        """
+        AUTO_APPLY_LEARNING=true → bevosita qo'llaydi (eski xulq) + audit.
+        Aks holda → pending_adjustments'ga yozadi + Telegram notify.
+        """
+        # No-op tekshiruvi — bir xil qiymat propose qilinmasin
+        try:
+            if old_value is not None and new_value is not None:
+                if abs(float(old_value) - float(new_value)) < 1e-9:
+                    return
+        except (TypeError, ValueError):
+            pass
+
+        if _auto_apply_enabled():
+            self._apply_locally(param, new_value)
+            if _db is not None:
+                try:
+                    adj_id = _db.propose_adjustment(
+                        param, old_value, new_value, f"auto-apply: {reason}"
+                    )
+                    _db.approve_adjustment(adj_id, applied_by="auto-apply")
+                except Exception as e:  # noqa: BLE001
+                    logger.debug(f"SelfLearner audit insert xato — {e}")
+            logger.info(
+                f"[SelfLearner] AUTO-APPLY {param}: {old_value}→{new_value} ({reason})"
+            )
+            return
+
+        if _db is None:
+            # DB yo'q — gate ishlamaydi, lekin in-memory ham mutatsiya qilinmaydi.
+            logger.warning(
+                f"[SelfLearner] propose skipped (no DB): {param} {old_value}→{new_value}"
+            )
+            return
+
+        try:
+            adj_id = _db.propose_adjustment(param, old_value, new_value, reason)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"SelfLearner: propose_adjustment xato — {e}")
+            return
+
+        logger.info(
+            f"[SelfLearner] PROPOSED {param}: {old_value}→{new_value} "
+            f"(id={adj_id[:8]}) — {reason}"
+        )
+
+        # Best-effort Telegram alert
+        if _tg is not None:
+            try:
+                _tg.notify_pending_adjustment_sync(
+                    param, old_value, new_value, reason, adj_id
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"SelfLearner: telegram notify xato — {e}")
+
+    def _apply_locally(self, param: str, value) -> None:
+        """AUTO_APPLY rejimida self.data['adapted']'ga to'g'ridan-to'g'ri yozish."""
+        a = self.data.setdefault("adapted", {})
+        if param.startswith("setup_weights."):
+            key = param[len("setup_weights."):]
+            a.setdefault("setup_weights", {})[key] = float(value) if value is not None else 0.0
+        elif param.startswith("disabled."):
+            key = param[len("disabled."):]
+            disabled = a.setdefault("disabled", [])
+            if value is None:
+                if key not in disabled:
+                    disabled.append(key)
+            else:
+                if key in disabled:
+                    disabled.remove(key)
+                a.setdefault("setup_weights", {})[key] = float(value)
+        elif param == "entry_pct":
+            a["entry_pct"] = float(value)
+        elif param == "sl_multiplier":
+            a["sl_multiplier"] = float(value)
+        elif param.startswith("session_weights."):
+            key = param[len("session_weights."):]
+            sw = a.setdefault("session_weights", {})
+            if value is None:
+                sw.pop(key, None)
+            else:
+                sw[key] = float(value)
+        else:
+            logger.warning(f"SelfLearner _apply_locally: noma'lum param {param!r}")
 
     # ── Public API ────────────────────────────────────────────────
 
@@ -174,7 +310,7 @@ class SelfLearner:
         regime:     str = "range",
     ):
         """Log a closed trade. Triggers analyze/evolve when thresholds hit."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         day_name = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"][now.weekday()]
         session_day_key = f"{session}_{day_name}"
 
@@ -326,7 +462,7 @@ class SelfLearner:
 
         weights = self.data["adapted"]["setup_weights"]
         disabled = self.data["adapted"]["disabled"]
-        changes = []
+        changes: list[str] = []
 
         for typ, counts in by_type.items():
             total = counts["w"] + counts["l"]
@@ -343,16 +479,32 @@ class SelfLearner:
                 new_w = max(old_w - 0.15, self.MIN_WEIGHT)
             else:
                 new_w = max(old_w - 0.25, self.MIN_WEIGHT)
-                if new_w <= self.MIN_WEIGHT and typ not in disabled:
-                    disabled.append(typ)
-                    changes.append(f"DISABLED {typ} (WR={wr*100:.0f}%)")
 
+            new_w = round(new_w, 2)
+
+            # Weight o'zgarishi (faqat sezilarli farq bo'lsa)
+            if abs(new_w - old_w) >= 0.01:
+                self._propose_or_apply(
+                    f"setup_weights.{typ}", old_w, new_w,
+                    f"analyze: WR={wr*100:.0f}% over {total} {typ} trades"
+                )
+                changes.append(f"{typ}: WR={wr*100:.0f}% w={old_w}→{new_w:.2f}")
+
+            # Disable propose (juda yomon WR + min weight)
+            if wr < 0.30 and new_w <= self.MIN_WEIGHT and typ not in disabled:
+                self._propose_or_apply(
+                    f"disabled.{typ}", None, None,  # ikkalasi ham null = disable
+                    f"analyze: WR={wr*100:.0f}% triggered disable"
+                )
+                changes.append(f"DISABLE {typ} (WR={wr*100:.0f}%)")
+
+            # Re-enable propose
             if typ in disabled and wr >= 0.50:
-                disabled.remove(typ)
-                changes.append(f"RE-ENABLED {typ} (WR={wr*100:.0f}%)")
-
-            weights[typ] = round(new_w, 2)
-            changes.append(f"{typ}: WR={wr*100:.0f}% w={old_w}→{new_w:.2f}")
+                self._propose_or_apply(
+                    f"disabled.{typ}", None, new_w,  # new=non-null = re-enable
+                    f"analyze: WR={wr*100:.0f}% suggests re-enable"
+                )
+                changes.append(f"RE-ENABLE {typ} (WR={wr*100:.0f}%)")
 
         # Entry precision adaptation
         win_trades = [t for t in recent if t["result"] == "win"]
@@ -360,12 +512,18 @@ class SelfLearner:
         overall_wr = len(win_trades) / len(recent) if recent else 0.5
 
         cur_pct = self.data["adapted"]["entry_pct"]
+        new_pct = cur_pct
         if overall_wr >= 0.60 and cur_pct < 0.50:
-            self.data["adapted"]["entry_pct"] = round(min(cur_pct + 0.05, 0.70), 2)
-            changes.append(f"entry_pct: {cur_pct:.2f}→{self.data['adapted']['entry_pct']:.2f}")
+            new_pct = round(min(cur_pct + 0.05, 0.70), 2)
         elif overall_wr < 0.40 and cur_pct > 0.30:
-            self.data["adapted"]["entry_pct"] = round(max(cur_pct - 0.05, 0.30), 2)
-            changes.append(f"entry_pct: {cur_pct:.2f}→{self.data['adapted']['entry_pct']:.2f}")
+            new_pct = round(max(cur_pct - 0.05, 0.30), 2)
+
+        if abs(new_pct - cur_pct) >= 0.01:
+            self._propose_or_apply(
+                "entry_pct", cur_pct, new_pct,
+                f"analyze: overall_wr={overall_wr*100:.0f}%"
+            )
+            changes.append(f"entry_pct: {cur_pct:.2f}→{new_pct:.2f}")
 
         # SL adaptation
         if loss_trades:
@@ -373,8 +531,13 @@ class SelfLearner:
             avg_sl_win  = sum(t["sl_pips"] for t in win_trades) / len(win_trades) if win_trades else avg_sl_loss
             cur_sl = self.data["adapted"]["sl_multiplier"]
             if avg_sl_loss > avg_sl_win * 1.3:
-                self.data["adapted"]["sl_multiplier"] = round(max(cur_sl - 0.1, 0.7), 2)
-                changes.append(f"sl_mult: {cur_sl:.1f}→{self.data['adapted']['sl_multiplier']:.1f}")
+                new_sl = round(max(cur_sl - 0.1, 0.7), 2)
+                if abs(new_sl - cur_sl) >= 0.01:
+                    self._propose_or_apply(
+                        "sl_multiplier", cur_sl, new_sl,
+                        "analyze: loss_sl > win_sl * 1.3"
+                    )
+                    changes.append(f"sl_mult: {cur_sl:.1f}→{new_sl:.1f}")
 
         logger.info(
             f"[SelfLearner] Analysis #{self.data['stats']['total']} "
@@ -414,19 +577,31 @@ class SelfLearner:
 
         weights = self.data["adapted"]["setup_weights"]
         disabled = self.data["adapted"]["disabled"]
-        msgs = []
+        msgs: list[str] = []
 
         for typ, wr in worst_20pct:
             if typ not in disabled:
-                disabled.append(typ)
+                self._propose_or_apply(
+                    f"disabled.{typ}", None, None,
+                    f"evolve: WR={wr*100:.0f}% in worst 20% over {self.EVOLVE_EVERY} trades"
+                )
                 msgs.append(f"PRUNE {typ} WR={wr*100:.0f}%")
 
         for typ, wr in best_30pct:
-            old = weights.get(typ, 1.0)
-            weights[typ] = round(min(old * 1.5, self.MAX_WEIGHT), 2)
+            old_w = weights.get(typ, 1.0)
+            new_w = round(min(old_w * 1.5, self.MAX_WEIGHT), 2)
+            if abs(new_w - old_w) >= 0.01:
+                self._propose_or_apply(
+                    f"setup_weights.{typ}", old_w, new_w,
+                    f"evolve: WR={wr*100:.0f}% in best 30% over {self.EVOLVE_EVERY} trades"
+                )
+                msgs.append(f"BOOST {typ} WR={wr*100:.0f}% w→{new_w:.2f}")
             if typ in disabled:
-                disabled.remove(typ)
-            msgs.append(f"BOOST {typ} WR={wr*100:.0f}% w→{weights[typ]:.2f}")
+                self._propose_or_apply(
+                    f"disabled.{typ}", None, new_w,
+                    f"evolve: WR={wr*100:.0f}% promoted to best 30%, re-enable"
+                )
+                msgs.append(f"RE-ENABLE {typ} WR={wr*100:.0f}%")
 
         logger.info(f"[SelfLearner] Evolution #{self.data['stats']['total']} | " + " | ".join(msgs))
 

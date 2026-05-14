@@ -37,6 +37,10 @@ ai-trading-agent/data/state/
 ai-trading-agent/apps/data/state/
 .trade_meta_*.json
 
+# ─── F2-3: Backtest output (har run'da yangi UUID fayllari) ─────────
+reports/
+ai-trading-agent/reports/
+
 # ─── IDE ──────────────────────────────────────────────────────────
 .vscode/
 .idea/

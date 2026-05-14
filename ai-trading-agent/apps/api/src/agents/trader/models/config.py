@@ -1,57 +1,121 @@
-from pydantic import BaseModel, Field
-from pydantic_settings import BaseSettings
+"""
+TradingConfig + RiskConfig — Pydantic v2 strict validation.
+
+F1-2: Silent fallback olib tashlandi. Noto'g'ri env qiymat (masalan
+RISK_PER_TRADE=abc) startupda ValidationError'ga olib keladi — degraded
+operatsiya bo'lishi mumkin emas.
+
+Maydon chegaralari (Field gt/ge/le) — typo'larga qarshi soft-guardrail.
+Cross-field invariants @model_validator orqali tekshiriladi:
+  • daily_max_risk    >= risk_per_trade   (Tasks.md F1-2 talabi)
+  • max_drawdown      >= daily_max_risk   (DD breaker daily breaker'dan kichik bo'lmaydi)
+  • tp1+tp2+tp3       ≈ 100               (partial close 100% chiqishi shart)
+
+Pydantic v2 BaseSettings env vars'ni avtomatik field nomi bo'yicha
+(case-insensitive) mapping qiladi — `env=` parametri kerak emas.
+`extra='ignore'` — `.env`'dagi yot o'zgaruvchilarni (OPENCLAW_STATE_DIR,
+AUTO_APPLY_LEARNING va h.k.) qabul qilmasdan jim o'tkazib yuborish.
+"""
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from dotenv import load_dotenv
 
 load_dotenv()
 
 
 class RiskConfig(BaseModel):
-    risk_per_trade: float = 1.0       # 1% per trade
-    daily_max_risk: float = 5.0       # -5% daily loss → STOP ALL
-    daily_profit_target: float = 10.0 # +10% daily profit → STOP ALL
-    max_positions: int = 2            # 1–2 active trades per pair
-    max_trades_per_day: int = 25      # hard limit
-    max_drawdown: float = 10.0
-    consecutive_loss_pause: int = 3   # 3 losses → 1h pause
-    tp1_close_pct: float = 40.0
-    tp2_close_pct: float = 30.0
-    tp3_close_pct: float = 30.0
+    """Pure-domain risk parametrlari — TradingConfig.get_risk_config() qaytaradi."""
+
+    model_config = ConfigDict(extra="forbid", validate_default=True)
+
+    risk_per_trade:         float = Field(1.0,  gt=0,  le=5.0)   # % per trade
+    daily_max_risk:         float = Field(5.0,  gt=0,  le=10.0)  # % daily loss circuit
+    daily_profit_target:    float = Field(10.0, gt=0,  le=50.0)  # % daily profit auto-stop
+    max_positions:          int   = Field(2,    ge=1,  le=10)    # concurrent trades
+    max_trades_per_day:     int   = Field(25,   ge=1,  le=100)   # daily trade cap
+    max_drawdown:           float = Field(10.0, gt=0,  le=50.0)  # % session DD breaker
+    consecutive_loss_pause: int   = Field(3,    ge=1,  le=20)    # losses before pause
+    tp1_close_pct:          float = Field(40.0, ge=0,  le=100)
+    tp2_close_pct:          float = Field(30.0, ge=0,  le=100)
+    tp3_close_pct:          float = Field(30.0, ge=0,  le=100)
+
+    @model_validator(mode="after")
+    def _check_invariants(self) -> "RiskConfig":
+        if self.daily_max_risk < self.risk_per_trade:
+            raise ValueError(
+                f"daily_max_risk ({self.daily_max_risk}%) must be >= "
+                f"risk_per_trade ({self.risk_per_trade}%)"
+            )
+        if self.max_drawdown < self.daily_max_risk:
+            raise ValueError(
+                f"max_drawdown ({self.max_drawdown}%) must be >= "
+                f"daily_max_risk ({self.daily_max_risk}%)"
+            )
+        tp_sum = self.tp1_close_pct + self.tp2_close_pct + self.tp3_close_pct
+        if abs(tp_sum - 100.0) > 0.1:
+            raise ValueError(
+                f"tp1+tp2+tp3 must sum to 100% (got {tp_sum:.2f}%)"
+            )
+        return self
 
 
 class TradingConfig(BaseSettings):
-    # MT5
-    mt5_login: int = Field(default=0, env="MT5_LOGIN")
-    mt5_password: str = Field(default="", env="MT5_PASSWORD")
-    mt5_server: str = Field(default="Exness-MT5Real34", env="MT5_SERVER")
+    """
+    Bot konfiguratsiyasi — `.env`'dan o'qiladi (pydantic-settings v2).
+    Noto'g'ri qiymat → ValidationError startupda.
+    """
 
-    # Trading
-    symbol: str = Field(default="XAUUSD", env="SYMBOL")
-    scan_interval: int = Field(default=30, env="SCAN_INTERVAL")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",          # .env'da yot vars (OPENCLAW_*, AUTO_APPLY_*) bo'lishi mumkin
+        validate_default=True,   # default qiymatlar ham bounds'ga mos kelishi shart
+    )
 
-    # Risk
-    risk_per_trade: float = Field(default=1.0, env="RISK_PER_TRADE")
-    daily_max_risk: float = Field(default=5.0, env="DAILY_MAX_RISK")
-    daily_profit_target: float = Field(default=10.0, env="DAILY_PROFIT_TARGET")
-    max_positions: int = Field(default=2, env="MAX_POSITIONS")
-    max_trades_per_day: int = Field(default=25, env="MAX_TRADES_PER_DAY")
-    max_drawdown: float = 10.0
+    # ── MT5 credentials — 0/empty = "not configured" (main.py setup tekshiradi) ──
+    mt5_login:    int = Field(0,  ge=0)
+    mt5_password: str = Field("")
+    mt5_server:   str = Field("Exness-MT5Real34", min_length=1)
 
-    # AI Brain
-    claude_api_key: str = Field(default="", env="CLAUDE_API_KEY")
-    min_ai_confidence: float = 0.70
+    # ── Trading ──
+    symbol:        str = Field("XAUUSD", min_length=3)
+    scan_interval: int = Field(30, ge=1, le=600)
 
-    # Telegram
-    telegram_bot_token: str = Field(default="", env="TELEGRAM_BOT_TOKEN")
-    telegram_chat_id: str   = Field(default="", env="TELEGRAM_CHAT_ID")
+    # ── Risk — bounds RiskConfig bilan parallel ──
+    risk_per_trade:      float = Field(1.0,  gt=0, le=5.0)
+    daily_max_risk:      float = Field(5.0,  gt=0, le=10.0)
+    daily_profit_target: float = Field(10.0, gt=0, le=50.0)
+    max_positions:       int   = Field(2,    ge=1, le=10)
+    max_trades_per_day:  int   = Field(25,   ge=1, le=100)
+    max_drawdown:        float = Field(10.0, gt=0, le=50.0)   # F1-2 fix: avval env binding yo'q edi
 
-    # Database / Socket
-    database_url: str = Field(default="", env="DATABASE_URL")
-    redis_url: str = Field(default="redis://localhost:6379", env="REDIS_URL")
-    socket_url: str = Field(default="http://localhost:8000", env="SOCKET_URL")
+    # ── AI Brain ──
+    claude_api_key:    str   = Field("")
+    min_ai_confidence: float = Field(0.70, ge=0.0, le=1.0)    # F1-2 fix: avval env binding yo'q edi
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    # ── Telegram (optional — bo'sh = notify off) ──
+    telegram_bot_token: str = Field("")
+    telegram_chat_id:   str = Field("")
+
+    # ── Database / Socket ──
+    database_url: str = Field("")
+    redis_url:    str = Field("redis://localhost:6379")
+    socket_url:   str = Field("http://localhost:8000")
+
+    @model_validator(mode="after")
+    def _check_invariants(self) -> "TradingConfig":
+        if self.daily_max_risk < self.risk_per_trade:
+            raise ValueError(
+                f"daily_max_risk ({self.daily_max_risk}%) must be >= "
+                f"risk_per_trade ({self.risk_per_trade}%)"
+            )
+        if self.max_drawdown < self.daily_max_risk:
+            raise ValueError(
+                f"max_drawdown ({self.max_drawdown}%) must be >= "
+                f"daily_max_risk ({self.daily_max_risk}%)"
+            )
+        return self
 
     def get_risk_config(self) -> RiskConfig:
         return RiskConfig(

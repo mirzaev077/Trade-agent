@@ -3,7 +3,7 @@ TradeAnalytics — CSV export, profit factor, session win rate, haftalik hisobot
 """
 import csv
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from loguru import logger
 
 
@@ -24,7 +24,7 @@ def log_trade_csv(
     """Har bir yopilgan tradeни CSV ga yozadi."""
     rr = round(tp_pips / sl_pips, 2) if sl_pips > 0 else 0
     row = {
-        "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         "direction": direction, "symbol": symbol,
         "entry": entry, "exit": exit_price, "sl": sl, "tp1": tp1,
         "lot": lot, "pnl": round(pnl, 2), "result": result,
@@ -79,7 +79,7 @@ def get_session_stats(trades: list, last_n: int = 100) -> dict:
 
 def build_weekly_report(trades: list, balance: float) -> str:
     """Haftalik Telegram hisobot matni."""
-    week_ago = datetime.utcnow() - timedelta(days=7)
+    week_ago = datetime.now(timezone.utc) - timedelta(days=7)
     weekly = [
         t for t in trades
         if _parse_ts(t.get("ts", "")) >= week_ago
@@ -115,7 +115,7 @@ def build_weekly_report(trades: list, balance: float) -> str:
 
     lines = [
         "📊 <b>HAFTALIK HISOBOT</b>",
-        f"📅 {week_ago.strftime('%d.%m')} – {datetime.utcnow().strftime('%d.%m.%Y')}",
+        f"📅 {week_ago.strftime('%d.%m')} – {datetime.now(timezone.utc).strftime('%d.%m.%Y')}",
         "",
         f"Trades : {total} ({wins}W / {losses}L)",
         f"Win Rate: <b>{wr}%</b>",
@@ -134,6 +134,10 @@ def build_weekly_report(trades: list, balance: float) -> str:
 
 def _parse_ts(ts_str: str) -> datetime:
     try:
-        return datetime.fromisoformat(ts_str)
+        dt = datetime.fromisoformat(ts_str)
+        # tz-aware bo'lishni majburlash (week_ago bilan taqqoslash uchun)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
     except Exception:
-        return datetime.min
+        return datetime.min.replace(tzinfo=timezone.utc)

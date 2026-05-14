@@ -1,6 +1,6 @@
-import pandas as pd
-import numpy as np
-from datetime import datetime, date
+from datetime import date
+
+from ..core.clock import get_clock
 from ..models.config import RiskConfig
 from ..models.signals import TradePermission
 
@@ -10,10 +10,11 @@ class RiskManagement:
         self.cfg = config or RiskConfig()
         self._today_trades: list = []
         self._daily_open_count: int = 0
-        self._count_date: date = date.today()
+        # F2-1: clock'dan kunni o'qish — backtest'da virtual sana ishlatadi
+        self._count_date: date = get_clock().now().date()
 
     def _reset_if_new_day(self):
-        today = date.today()
+        today = get_clock().now().date()
         if today != self._count_date:
             self._daily_open_count = 0
             self._today_trades = []
@@ -139,7 +140,8 @@ class RiskManagement:
         return actions
 
     def add_closed_trade(self, trade: dict):
-        if trade.get("close_time", datetime.utcnow()).date() == date.today():
+        today = get_clock().now().date()
+        if trade.get("close_time", get_clock().now()).date() == today:
             self._today_trades.append(trade)
 
     def _format_rejection(self, checks: dict) -> str:

@@ -1,7 +1,7 @@
 import asyncio
-from datetime import datetime, date
 from loguru import logger
 
+from .core.clock import get_clock
 from .mt5_connector import MT5Connector
 from .analysis import ICTAnalysis
 from .brain.ai_validator import TradingAIBrain
@@ -11,7 +11,7 @@ from .models.config import TradingConfig
 from .models.orders import TradeOrder
 from .models.signals import TradeSignal
 from .utils.session_times import (
-    get_current_session, is_kill_zone, session_min_confluence,
+    get_current_session,
 )
 from .utils.news_filter import has_high_impact_news, get_next_news_str
 from .utils import telegram_bot as tg
@@ -65,10 +65,16 @@ class TraderAgent:
 
     TF_WEIGHTS  = {"D1": 10, "H4": 8, "H1": 6, "M30": 4, "M15": 3, "M5": 2}
 
-    def __init__(self, config: TradingConfig = None):
+    def __init__(self, config: TradingConfig = None, health_state=None):
         self.config  = config or TradingConfig()
         self.running = False
         self.symbol  = self.config.symbol
+
+        # F1-4: Healthcheck shared state — main.py'da yaratiladi va beriladi.
+        # None bo'lsa health endpoint o'chirilgan (back-compat).
+        self.health_state = health_state
+        if self.health_state is not None:
+            self.health_state.scan_interval_sec = int(self.config.scan_interval)
 
         self.mt5     = MT5Connector()
         self.ict     = ICTAnalysis()
@@ -203,7 +209,41 @@ class TraderAgent:
                 await self._tick()
             except Exception as e:
                 logger.error(f"Tick error: {e}")
+            # F1-4: Healthcheck snapshot — har tick'dan keyin yangilash
+            self._update_health_state()
             await asyncio.sleep(self.config.scan_interval)
+
+    def _update_health_state(self) -> None:
+        """F1-4: HealthState dataclass'ni so'nggi qiymatlar bilan yangilash."""
+        if self.health_state is None:
+            return
+        try:
+            from datetime import datetime, timezone
+            self.health_state.last_tick_at  = datetime.now(timezone.utc)
+            self.health_state.mt5_connected = bool(self.mt5.is_connected())
+            try:
+                self.health_state.open_positions = len(self.mt5.get_open_positions())
+            except Exception:  # noqa: BLE001
+                pass
+            # Daily PnL — risk._today_trades'dan
+            try:
+                today = getattr(self.risk, "_today_trades", []) or []
+                pos_pnl = sum(t.get("pnl", 0) for t in today if t.get("pnl", 0) > 0)
+                neg_pnl = sum(t.get("pnl", 0) for t in today if t.get("pnl", 0) < 0)
+                bal = self._starting_balance or 0.0
+                self.health_state.daily_pnl_pct = (
+                    (pos_pnl + neg_pnl) / bal * 100 if bal > 0 else 0.0
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            # Pause holatlari (DD breaker, consecutive loss, news cancel)
+            self.health_state.is_paused = bool(
+                getattr(self, "_dd_breaker_hit", False)
+                or getattr(self, "_pause_until", None)
+                or getattr(self, "_news_cancel_done", False)
+            )
+        except Exception as e:  # noqa: BLE001 — health update hech qachon tick'ni buzmaydi
+            logger.debug(f"[healthcheck] update error: {e}")
 
     # ── Tick ──────────────────────────────────────────────────────
 
@@ -236,7 +276,7 @@ class TraderAgent:
             self._recovery_notified = False
 
         # ── Weekend guard ─────────────────────────────────────────
-        now_utc = datetime.utcnow()
+        now_utc = get_clock().now()
         # Friday 22:00 UTC → Monday 00:00 UTC — market closed
         if now_utc.weekday() == 4 and now_utc.hour >= 22:
             logger.debug("Weekend: Friday 22:00+ — skip")
@@ -303,12 +343,12 @@ class TraderAgent:
                 return
 
         # ── Monday/Friday qoidasi: kamroq trade ──────────────────
-        _today_wd = datetime.utcnow().weekday()
+        _today_wd = get_clock().now().weekday()
         _reduced_day = _today_wd in self.REDUCED_DAYS
 
         # ── Haftalik hisobot (Yakshanba) ──────────────────────────
-        _cur_week = datetime.utcnow().isocalendar()[1]
-        if (datetime.utcnow().weekday() == 6 and
+        _cur_week = get_clock().now().isocalendar()[1]
+        if (get_clock().now().weekday() == 6 and
                 _cur_week != self._last_weekly_report_week):
             self._last_weekly_report_week = _cur_week
             try:
@@ -383,7 +423,7 @@ class TraderAgent:
             return
 
         # ── Session open levels (Midnight / London 08:00 / NY 13:30) ─
-        now = datetime.utcnow()
+        now = get_clock().now()
         today = now.date()
         if self._session_open_date != today:
             self._midnight_open = self._london_open = self._ny_open = 0.0
@@ -425,7 +465,7 @@ class TraderAgent:
         pf_val   = get_profit_factor(self.learner.data.get("trades", []))
         dxy_str  = f" DXY={self._dxy_trend[:4]}" if self._dxy_symbol else ""
         logger.info(
-            f"[{datetime.utcnow().strftime('%H:%M')}] {self.symbol} [{self._mode}] "
+            f"[{get_clock().now().strftime('%H:%M')}] {self.symbol} [{self._mode}] "
             f"W1={w1_str} D1={d1_bias} H4={h4_trend} H1={h1_trend}{dxy_str} | "
             f"MMXM={mmxm_h4}({mmxm_dir}) | want={want_dir} | "
             f"{session}{kz_str}{m1_str}{rd_str} | pending={pending_cnt} | "
@@ -442,7 +482,7 @@ class TraderAgent:
             self._pf_warn_sent = False  # reset when PF recovers
 
         # ── Session win rate — har 4 soatda Telegram ──────────────
-        _cur_hour = datetime.utcnow().hour
+        _cur_hour = get_clock().now().hour
         if _cur_hour % 4 == 0 and _cur_hour != self._last_session_stats_hour:
             self._last_session_stats_hour = _cur_hour
             try:
@@ -462,8 +502,8 @@ class TraderAgent:
 
         # ── 5 consecutive losses → 1 soat pauza ──────────────────
         if self._pause_until is not None:
-            if datetime.utcnow() < self._pause_until:
-                rem = int((self._pause_until - datetime.utcnow()).total_seconds() / 60)
+            if get_clock().now() < self._pause_until:
+                rem = int((self._pause_until - get_clock().now()).total_seconds() / 60)
                 logger.warning(f"⏸ PAUSED {rem}m (5 ketma-ket yo'qotish)")
                 await self._manage_positions()
                 return
@@ -837,7 +877,7 @@ class TraderAgent:
             cooldown_min = 30 if in_kz else 60
             last_at = self._last_order_at.get(direction)
             if last_at is not None:
-                elapsed = (datetime.utcnow() - last_at).total_seconds() / 60
+                elapsed = (get_clock().now() - last_at).total_seconds() / 60
                 if elapsed < cooldown_min:
                     logger.debug(
                         f"[{self._mode}] {direction.upper()} cooldown "
@@ -1837,7 +1877,7 @@ class TraderAgent:
             _be_cand = self._be_reentry_candidates.get(want_dir)
             _is_be_reentry = False
             if _be_cand:
-                _cand_age = (datetime.utcnow() - _be_cand["time"]).total_seconds()
+                _cand_age = (get_clock().now() - _be_cand["time"]).total_seconds()
                 if _cand_age < 7200:  # 2h ichida
                     lot_each = max(vol_min, round(round(lot_each * 0.5 / vol_step) * vol_step, 2))
                     _is_be_reentry = True
@@ -1953,7 +1993,7 @@ class TraderAgent:
                     save_trade_meta(self._trade_meta)  # F0-1
                     self.risk.record_trade_opened()
                     placed_sets += 1
-                    self._last_order_at[want_dir] = datetime.utcnow()
+                    self._last_order_at[want_dir] = get_clock().now()
                     logger.success(
                         f"\n{'═'*60}\n"
                         f"  MARKET | {want_dir.upper()} | {zone['label']} [{zone_tf_now}]{sb_tag}{htf_tag}\n"
@@ -1995,10 +2035,10 @@ class TraderAgent:
                     "tp_label": "TP1", "sl_pips": lmt_sl_p,
                     "zone_lo": zone_lo, "zone_hi": zone_hi,
                     "tf": zone_tf_now, "mode": mode,
-                    "label": zone["label"], "placed_at": datetime.utcnow(),
+                    "label": zone["label"], "placed_at": get_clock().now(),
                 }
                 placed_sets += 1
-                self._last_order_at[want_dir] = datetime.utcnow()
+                self._last_order_at[want_dir] = get_clock().now()
                 if _is_be_reentry and want_dir in self._be_reentry_candidates:
                     del self._be_reentry_candidates[want_dir]
                 logger.success(
@@ -2098,7 +2138,7 @@ class TraderAgent:
             meta = self._pending_zones[ticket]
 
             if ticket in mt5_pending:
-                age_h = (datetime.utcnow() - meta["placed_at"]).total_seconds() / 3600
+                age_h = (get_clock().now() - meta["placed_at"]).total_seconds() / 3600
                 if age_h > 8:
                     try:
                         self.mt5.cancel_pending_order(ticket)
@@ -2228,7 +2268,7 @@ class TraderAgent:
                     consec = max(0, -self._streak)
                     if consec >= 5 and self._pause_until is None:
                         from datetime import timedelta
-                        self._pause_until = datetime.utcnow() + timedelta(hours=1)
+                        self._pause_until = get_clock().now() + timedelta(hours=1)
                         logger.warning(
                             f"🚨 {consec} ketma-ket yo'qotish — 1 soat PAUZA "
                             f"({self._pause_until.strftime('%H:%M')} gacha)"
@@ -2299,7 +2339,7 @@ class TraderAgent:
                 if result_str == "BE":
                     _be_dir = meta.get("direction", "buy")
                     self._be_reentry_candidates[_be_dir] = {
-                        "time":  datetime.utcnow(),
+                        "time":  get_clock().now(),
                         "entry": meta.get("entry", 0),
                         "label": meta.get("label", ""),
                     }
@@ -2497,7 +2537,7 @@ class TraderAgent:
         return float(v) if not np.isnan(v) else 1.0
 
     def _in_kill_zone(self) -> bool:
-        now = datetime.utcnow()
+        now = get_clock().now()
         cur = now.hour * 60 + now.minute
         return (
             0*60  <= cur <= 3*60   or   # Asia KZ     (00:00-03:00 UTC)
@@ -2507,7 +2547,7 @@ class TraderAgent:
 
     def _in_silver_bullet(self) -> bool:
         """ICT Silver Bullet: London 10-11 UTC, NY 15-16 UTC — eng yuqori ishonchlilik."""
-        now = datetime.utcnow()
+        now = get_clock().now()
         cur = now.hour * 60 + now.minute
         return (
             10*60 <= cur <= 11*60 or   # London Silver Bullet
@@ -2714,7 +2754,7 @@ class TraderAgent:
         Gap fills juda yuqori ehtimollik (~85%). XAUUSD da Weekend gap bo'lsa ishlatiladi."""
         if d1_candles is None or len(d1_candles) < 3:
             return []
-        today_wd = datetime.utcnow().weekday()
+        today_wd = get_clock().now().weekday()
         if today_wd > 2:   # Faqat Dushanba/Seshanba/Chorshanba relevantmas → Dush+Sesh (0,1)
             pass           # Hafta davomida ham gap dolg'alashi mumkin
         try:

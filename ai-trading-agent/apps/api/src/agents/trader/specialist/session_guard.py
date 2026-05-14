@@ -15,7 +15,9 @@ Windows (UTC):
   NY tail:       16:00 – 22:00  (allowed with reduced quality)
 """
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import datetime  # noqa: F401  # type hint uchun saqlanadi
+
+from ..core.clock import get_clock
 
 
 @dataclass
@@ -58,7 +60,7 @@ class SessionGuard:
 
     def check(self, now: datetime = None, base_min_confluence: int = 10) -> SessionGuardResult:
         if now is None:
-            now = datetime.utcnow()
+            now = get_clock().now()
 
         h, m = now.hour, now.minute
         t = now.hour * 60 + now.minute  # minutes since midnight
@@ -152,12 +154,12 @@ class SessionGuard:
 
     def is_silver_bullet(self, now: datetime = None) -> bool:
         if now is None:
-            now = datetime.utcnow()
+            now = get_clock().now()
         t = now.hour * 60 + now.minute
         return (10 * 60 <= t < 11 * 60) or (14 * 60 <= t < 15 * 60) or (2 * 60 <= t < 4 * 60)
 
     def is_kill_zone(self, now: datetime = None) -> bool:
         if now is None:
-            now = datetime.utcnow()
+            now = get_clock().now()
         t = now.hour * 60 + now.minute
         return (0 <= t < 3 * 60) or (8 * 60 <= t < 11 * 60) or (13 * 60 <= t < 16 * 60)

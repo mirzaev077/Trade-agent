@@ -4,7 +4,7 @@ LiquidityHunterAgent — Finds all EQH/EQL, PDH/PDL, BSL/SSL pools.
 Predicts where price will hunt liquidity next.
 Output feeds into ManipulationAgent to confirm actual sweep.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass

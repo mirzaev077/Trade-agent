@@ -24,6 +24,10 @@ from src.agents.trader.utils.telegram_bot import (
     notify_crash as _tg_notify_crash,
     notify_shutdown as _tg_notify_shutdown,
 )
+from src.agents.trader.health import HealthState, start_health_server_in_thread
+
+# F1-4: bot ishga tushganda yagona shared state — agent va FastAPI o'rtasida
+_HEALTH_STATE = HealthState()
 
 
 # ── Crash + shutdown alerts (F0-3) ────────────────────────────────────────────
@@ -313,7 +317,7 @@ async def _run_agent(config: TradingConfig) -> bool:
     # Har safar fresh import (reload dan keyin yangi class talab qilinadi)
     from src.agents.trader import TraderAgent as _Agent
 
-    agent        = _Agent(config)
+    agent        = _Agent(config, health_state=_HEALTH_STATE)
     restart_flag = [False]
 
     def _on_change(filename: str):
@@ -348,6 +352,14 @@ async def _run_agent(config: TradingConfig) -> bool:
 
 async def main():
     config = onboarding()
+
+    # F1-4: healthcheck endpoint'ni daemon thread'da ishga tushirish
+    # (asosiy bot loop blokrlanmaydi; port 8080)
+    _HEALTH_STATE.scan_interval_sec = int(config.scan_interval)
+    try:
+        start_health_server_in_thread(_HEALTH_STATE)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[healthcheck] thread start xato: {e}")
 
     while True:
         should_reload = await _run_agent(config)

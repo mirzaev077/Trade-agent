@@ -3,7 +3,6 @@ NewsFilter — high-impact economic news blackout.
 Forex Factory public calendar JSON (no API key needed).
 Cache: 1 hour. Fallback: allow trading (fail-open).
 """
-import asyncio
 from datetime import datetime, timedelta, timezone
 from loguru import logger
 
@@ -43,9 +42,11 @@ def _parse_event_time(date_str: str) -> datetime | None:
     try:
         # Python 3.11+ fromisoformat Z suffix qo'llab-quvvatlaydi
         dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-        # tzinfo olib, UTC ga ko'chirish
-        if dt.tzinfo is not None:
-            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        # tz-aware UTC sifatida saqlash (F2-1: DTZ-clean)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
         return dt
     except Exception:
         return None
@@ -56,9 +57,13 @@ async def has_high_impact_news(window_min: int = 30) -> bool:
     Joriy vaqtdan ±window_min daqiqada high-impact USD/XAU news bormi?
     Ha → True (trade o'tkazib yubor).
     Xato yoki ma'lumot yo'q → False (trading davom etadi).
+
+    Eslatma: news fetch async + real-time API call. Backtest'da bu funksiya
+    chaqirilmaydi (tarixiy ma'lumot ko'chirib o'tkazadi). Shuning uchun
+    real wall-clock'dan foydalanish xavfsiz — clock injection kerakmas.
     """
     global _cache
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     # Cache yangilash
     if (
@@ -96,7 +101,7 @@ async def has_high_impact_news(window_min: int = 30) -> bool:
 
 def get_next_news_str() -> str:
     """Log uchun: keyingi high-impact event nomini qaytaradi."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     upcoming = []
     for ev in _cache.get("data", []):
         if ev.get("country", "").upper() not in _HIGH_CURRENCIES:
