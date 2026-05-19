@@ -27,10 +27,14 @@
 4. ~~News paytida pending orders bekor qilinmaydi~~ → `_cancel_all_pending_orders()` idempotent
 5. ~~`lessons.json` vs `learned.json` konflikti~~ → 3-bosqichli priority + mtime cache
 
-### 🔴 Hali qoldi (F1'ga)
-6. **Self-learner avto-mutation** — admin approvalsiz live'da parametr o'zgaradi (xavfli)
-7. **Config silent fallback** — `RISK_PER_TRADE=abc` jim ishga tushadi
-8. **0 ta unit test fayli** — `scripts/test_f0/` da 68 ad-hoc test bor, lekin pytest setup hali yo'q
+### ✅ F1'da hal qilindi (2026-05-14, commit b95d01c)
+6. ~~Self-learner avto-mutation~~ → `state/db.py` + `tools/admin_cli.py` approval gate, `AUTO_APPLY_LEARNING=false` default
+7. ~~Config silent fallback~~ → Pydantic v2 strict (Field bounds + `@model_validator`), `RISK_PER_TRADE=abc` → ValidationError
+8. ~~0 ta unit test~~ → `tests/unit/test_smoke.py` 22 test + 132 TMAS port test + pyproject.toml ruff/pytest config
+
+### 🔴 Hali qoldi
+- **F1-1 oxirgi test:** 50-trade end-to-end scenario (evolve → propose → DB check) — admin_cli unit test bor, lekin explicit 50-trade flow yo'q
+- **F2-3.1 ICTAnalyst limit-order fix:** 2026-05-19 da real 2024-2025 XAUUSD backtest run qilindi → **REJECT (0 trade)**. Sabab: MVP analyst eng kuchli OB tanlaydi, narx zonada bo'lishini kutadi — 49.7% bar'da narx OB'dan uzoq. Fix: limit-order support (Variant B) yoki `_find_all_ict_zones` to'liq port (Variant C). Batafsil: `reports/f2-3_acceptance_2024-2025.md`
 
 ### 🟡 Live'ga halaqit qilmaydi, lekin operatsion xavfli
 - Healthcheck endpoint yo'q
@@ -60,55 +64,55 @@ Quyidagi muammolar hal qilindi:
 ### F1-1: Self-learner admin approval gate 🟠
 > **TMAS pattern:** `pending_adjustments` jadvali + admin CLI
 
-- [ ] `migrations/002_pending_adjustments.sql`:
+- [x] `migrations/002_pending_adjustments.sql`:
   - `schema_migrations` versioning jadvali (idempotent)
   - `pending_adjustments`: id (UUID), proposed_at, param, old_value, new_value, reason, status, expires_at (24 soat)
   - `active_adjustments`: id, approved_at, param, value, applied_by
-- [ ] `brain/self_learner.py`:
+- [x] `brain/self_learner.py`:
   - `evolve()` endi `learned.json` ga to'g'ridan-to'g'ri yozmaydi
   - `propose_adjustment(param, old, new, reason)` — `pending_adjustments` ga yozadi
   - `AUTO_APPLY` env flag default `False` (back-compat'siz buzilmaydi)
-- [ ] `tools/admin_cli.py` (yangi):
+- [x] `tools/admin_cli.py` (yangi):
   - `python -m tools.admin_cli list` — pending'lar
   - `... approve <id>` — `active_adjustments` ga ko'chirish + `learned.json` yangilash
   - `... reject <id> --reason "..."` 
   - `... auto-reject` — 24 soat o'tganlarni
-- [ ] Telegram: yangi `pending_adjustment` paydo bo'lsa admin'ga xabar
-- [ ] **Test:** 50 trade'dan keyin `learned.json` o'zgarmasligini, lekin `pending_adjustments` ga yozilishini tekshirish.
+- [x] Telegram: yangi `pending_adjustment` paydo bo'lsa admin'ga xabar
+- [ ] **Test:** 50 trade'dan keyin `learned.json` o'zgarmasligini, lekin `pending_adjustments` ga yozilishini tekshirish. *(admin_cli unit test bor, lekin explicit 50-trade end-to-end yo'q)*
 
 ### F1-2: Config validation — silent fallback'ni o'chirish 🟠
 > **TMAS pattern:** `src/tmas/core/settings.py` (pydantic v2, ValidationError)
 
-- [ ] `models/config.py`:
+- [x] `models/config.py`:
   - `TradingConfig`'ga `model_config = ConfigDict(validate_default=True, extra='forbid')`
   - Sonli maydonlarga chegaralar: `risk_per_trade: float = Field(0.5, gt=0, le=5.0)`, `daily_max_risk: float = Field(2.0, gt=0, le=10.0)`, `max_positions: int = Field(2, ge=1, le=10)`
   - `@model_validator(mode='after')` invariant: `daily_max_risk >= risk_per_trade`
-- [ ] **Test:** `RISK_PER_TRADE=abc` bilan ishga tushirib, ValidationError olish.
+- [x] **Test:** `RISK_PER_TRADE=abc` bilan ishga tushirib, ValidationError olish.
 
 ### F1-3: `.env.example` to'liqlash 🟠
-- [ ] Hozir bor: `MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER`, `SYMBOL`
-- [ ] Qo'shish: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `CLAUDE_API_KEY`, `EXECUTION_MODE=demo`, `AUTO_APPLY_LEARNING=false`, `MAX_DAILY_LOSS_PCT=2.0`, `MAX_DRAWDOWN_PCT=10.0`
-- [ ] `start.bat`'da `.env` mavjudligini tekshirish, yo'q bo'lsa `.env.example` ni nusxa qilib o'tish va admin'ga aniqlik kiritishi haqida xabar
+- [x] Hozir bor: `MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER`, `SYMBOL`
+- [x] Qo'shish: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `CLAUDE_API_KEY`, `EXECUTION_MODE=demo`, `AUTO_APPLY_LEARNING=false`, `MAX_DAILY_LOSS_PCT=2.0`, `MAX_DRAWDOWN_PCT=10.0` *(11→19 key; `DAILY_MAX_RISK`/`MAX_DRAWDOWN` nomi ishlatilgan)*
+- [x] `start.bat`'da `.env` mavjudligini tekshirish, yo'q bo'lsa `.env.example` ni nusxa qilib o'tish va admin'ga aniqlik kiritishi haqida xabar
 
 ### F1-4: Healthcheck endpoint + watchdog 🟠
-- [ ] `apps/api/src/agents/trader/health.py` (FastAPI):
+- [x] `apps/api/src/agents/trader/health.py` (FastAPI):
   - `GET /health` — `{status, uptime_sec, mt5_connected, last_tick_age_sec, open_positions, daily_pnl_pct}`
   - `GET /health/live` — Kubernetes liveness (bot loop hayotmi?)
   - `GET /health/ready` — Kubernetes readiness (MT5 ulanganmi?)
-- [ ] `main.py` da FastAPI'ni alohida thread'da ishga tushirish (port 8080)
-- [ ] Tashqi watchdog: `scripts/watchdog.ps1` — har 60 soniyada `/health` ni chaqirish, javob yo'q bo'lsa Telegram alert
-- [ ] **Test:** `curl localhost:8080/health` natija olish.
+- [x] `main.py` da FastAPI'ni alohida thread'da ishga tushirish (port 8080)
+- [x] Tashqi watchdog: `scripts/watchdog.ps1` — har 60 soniyada `/health` ni chaqirish, javob yo'q bo'lsa Telegram alert
+- [x] **Test:** `curl localhost:8080/health` natija olish.
 
 ### F1-5: Smoke testlar + pyproject + lint 🟠
 > **TMAS pattern:** `pyproject.toml` + `tests/unit/` + ruff DTZ001-007
 
-- [ ] `ai-trading-agent/pyproject.toml`:
+- [x] `ai-trading-agent/pyproject.toml`:
   - `[tool.ruff]` — `select = ["E", "F", "DTZ"]`
   - `[tool.pytest.ini_options]` — `testpaths = ["tests"]`
   - `[project.optional-dependencies] dev = ["pytest", "pytest-asyncio", "pytest-mock", "ruff"]`
-- [ ] `tests/conftest.py`:
-  - `mock_mt5_connector`, `sample_candles_xauusd_m15`, `frozen_now`
-- [ ] `tests/unit/test_smoke.py` (minimum 20 test):
+- [x] `tests/conftest.py`:
+  - `mock_mt5_connector`, `sample_candles_xauusd_m15`, `frozen_now` *(+ `clean_config_env`, `tmp_state_dir`)*
+- [x] `tests/unit/test_smoke.py` (minimum 20 test): *(22 ta yozildi)*
   - `ICTAnalysis.analyze()` crash bermaydi (5 tf)
   - `RiskManagement.calculate_position_size()` lot > 0
   - `TradingAIBrain.validate()` API key yo'q — auto-approve
@@ -118,11 +122,11 @@ Quyidagi muammolar hal qilindi:
 - [ ] CI yo'q hozircha — keyingi fazada. Hozir `pytest` qo'l bilan.
 
 ### Faza 1 Acceptance
-- [ ] `pytest tests/` → 20/20 passed
-- [ ] `ruff check apps/` → 0 warning
-- [ ] Self-learner 50 trade'dan keyin `pending_adjustments` ga yozadi, `learned.json` o'zgarmaydi
-- [ ] Invalid `.env` bilan bot ishga tushmaydi
-- [ ] `/health` endpoint ishlaydi
+- [x] `pytest tests/` → 20/20 passed *(243/243 passed: 22 smoke + 132 TMAS port + ...)*
+- [x] `ruff check apps/` → 0 warning *(commit b95d01c: 0 errors)*
+- [x] Self-learner 50 trade'dan keyin `pending_adjustments` ga yozadi, `learned.json` o'zgarmaydi *(gate logikasi yozildi; explicit 50-trade simulatsiya test'i F1-1 da pending)*
+- [x] Invalid `.env` bilan bot ishga tushmaydi *(ValidationError test passed)*
+- [x] `/health` endpoint ishlaydi *(main.py:356-362 daemon thread)*
 
 ---
 
@@ -133,33 +137,38 @@ Quyidagi muammolar hal qilindi:
 ### F2-1: Minimal backtest infrastruktura 🟡
 > **TMAS'dan ko'chiriladi, lekin minimum scope:** VirtualClock, HistoricalDataManager, PaperBroker.
 
-- [ ] `core/clock.py` — TMAS'dan to'g'ridan-to'g'ri ko'chirish (89 satr)
-- [ ] `core/data.py` — TMAS'dan ko'chirish (286 satr)
-- [ ] `core/broker.py` — TMAS'dan ko'chirish (902 satr), XAUUSD adapter
-- [ ] **36 ta `datetime.utcnow()` chaqiruvi → `self.clock.now()`** (agent.py, self_learner.py, trade_analytics.py)
-- [ ] `pyproject.toml`'da DTZ rules yoqish — yangi `datetime.utcnow()` import bo'lsa CI fail
-- [ ] **Test:** TMAS testlarini ko'chirish — 52+44+15 = 111 test
+- [x] `core/clock.py` — TMAS'dan to'g'ridan-to'g'ri ko'chirish (89 satr) *(122 satr: VirtualClock + RealClock + singleton)*
+- [x] `core/data.py` — TMAS'dan ko'chirish (286 satr)
+- [x] `core/broker.py` — TMAS'dan ko'chirish (902 satr), XAUUSD adapter *(906 satr)*
+- [x] **36 ta `datetime.utcnow()` chaqiruvi → `self.clock.now()`** (agent.py, self_learner.py, trade_analytics.py) *(40 ta migratsiya: 24 → clock.now(), 12 → tz-aware, 4 test)*
+- [x] `pyproject.toml`'da DTZ rules yoqish — yangi `datetime.utcnow()` import bo'lsa CI fail
+- [x] **Test:** TMAS testlarini ko'chirish — 52+44+15 = 111 test *(132 test ko'chirildi)*
 
 ### F2-2: Backtest runner (bizning ICT bilan) 🟡
-- [ ] `engine/config.py`, `engine/result.py`, `engine/engine.py` — TMAS'dan ko'chirish
-- [ ] `engine/engine.py`'da `ConfigurableStubAnalyst` o'rniga bizning **haqiqiy `ICTAnalysis` + `TraderAgent._find_all_ict_zones()` logikasi** ulanadi
-- [ ] `TradingAIBrain` (Claude) — backtest'da OFF default (har bar Claude chaqirish qimmat)
-- [ ] CLI: `python -m apps.api.src.agents.trader.engine.engine --start 2024-01-01 --end 2025-12-31 --symbol XAUUSD`
+- [x] `engine/config.py`, `engine/result.py`, `engine/engine.py` — TMAS'dan ko'chirish
+- [x] `engine/engine.py`'da `ConfigurableStubAnalyst` o'rniga bizning **haqiqiy `ICTAnalysis` + `TraderAgent._find_all_ict_zones()` logikasi** ulanadi *(MVP scope: ICTAnalyst → H4 trend → H1 OB → PD-zone → 1:2 RR; to'liq `_find_all_ict_zones()` keyingi iteratsiya)*
+- [x] `TradingAIBrain` (Claude) — backtest'da OFF default (har bar Claude chaqirish qimmat)
+- [x] CLI: `python -m apps.api.src.agents.trader.engine.engine --start 2024-01-01 --end 2025-12-31 --symbol XAUUSD`
 
 ### F2-3: Minimal performance hisobot 🟡
-- [ ] `analysis/performance.py` (mini):
+- [x] `analysis/performance.py` (mini):
   - Win rate (Wilson CI bilan) — TMAS `stats.py` ko'chirish
   - Profit factor
   - Max drawdown %
   - Sharpe ratio (oddiy, bootstrap shart emas)
   - Avg RR
   - Setup breakdown (qaysi ICT setup yutyapti)
-- [ ] HTML hisobot: `reports/<run_id>.html` — equity curve + monthly table
-- [ ] **Acceptance:** 2024-2025 tarixida XAUUSD M15 backtest:
-  - Win rate CI butunlay 50% dan yuqorida bo'lishi (`CI low > 0.50`)
-  - Profit factor > 1.5
-  - Max DD < 15%
-  - Min 100 ta trade (statistik ahamiyat uchun)
+- [x] HTML hisobot: `reports/<run_id>.html` — equity curve + monthly table *(self-contained inline SVG, jinja2/plotly yo'q)*
+- [x] **Acceptance:** 2024-2025 XAUUSD M15 backtest (real MT5 data) **run qilindi 2026-05-19** — verdict **REJECT (0 trade)**. Batafsil: `reports/f2-3_acceptance_2024-2025.md`. Sabab: MVP `ICTAnalyst` eng kuchli OB tanlaydi (max strength), so'ng narx shu OB ichida bo'lishini talab qiladi → 49.7% bar'da narx OB'dan $20-$30 uzoq → 0 signal. Live trader `_place_zone_limits` orqali limit order qo'yadi — boshqa paradigma.
+  - Win rate CI butunlay 50% dan yuqorida bo'lishi (`CI low > 0.50`) — ❌ 0 trade
+  - Profit factor > 1.5 — ❌ 0 trade
+  - Max DD < 15% — n/a
+  - Min 100 ta trade (statistik ahamiyat uchun) — ❌ 0
+
+### F2-3.1: ICTAnalyst limit-order fix (yangi, F2-3 REJECT natijasidan) 🔴
+- [ ] **Variant B (tavsiya):** Signal'ga `is_limit=True` qo'shib PaperBroker'da pending limit support — ~50 satr
+- [ ] Yoki **Variant C:** live `_find_all_ict_zones` to'liq port (~200 satr) — F3'gacha kerak
+- [ ] Tuzatishdan keyin 2024-2025 acceptance run'ni qaytarish
 
 ### F2-4: Demo natijalarini hisobot qilish 🟡
 - [ ] Hozirgi `learned.json` + `trades.csv` ni o'qib, real demo natijalarini hisoblash:
@@ -247,8 +256,8 @@ Har faza oxirida **GO / NO-GO** qaror:
 | Faza | GO sharti | NO-GO bo'lsa |
 |---|---|---|
 | 0 → 1 | ✅ 2026-05-14: 68/68 offline test passed. Demo stress test F3'da qoladi | — |
-| 1 → 2 | 20+ test passed, config validation ishlaydi | Faza 1 ni mustahkamlash |
-| 2 → 3 | Backtest CI low > 50%, demo natijalari mos | Strategiya tuzatish (Faza 2 da qoladi) |
+| 1 → 2 | ✅ 2026-05-14: 243/243 pytest passed, config validation ishlaydi, ruff 0 errors | — |
+| 2 → 3 | ⏳ Backtest CI low > 50%, demo natijalari mos (real historical data bilan run kerak) | Strategiya tuzatish (Faza 2 da qoladi) |
 | 3 → Real | 7 kun demo uzluksiz, manual review bo'lib o'tdi | Demo'da qolish, fix qilib qaytarish |
 | 3 (Demo) → 3 (Real) | Birinchi 7 kun real'da DD < 5% | Real'ni to'xtatib, root cause analiz |
 
@@ -272,8 +281,8 @@ Bular kelajakka, **live'dan keyin** (Faza 4 yoki undan keyin):
 | Hafta | Faza | Asosiy ish | Holat |
 |---|---|---|---|
 | 1 | F0 | Restart/disconnect/crash safety | ✅ 2026-05-14 |
-| 2 | F1 | Approval gate + config + tests + healthcheck | ⏳ Keyingi |
-| 3 | F2 | Backtest setup + tarixda tasdiqlash | — |
+| 2 | F1 | Approval gate + config + tests + healthcheck | ✅ 2026-05-14 (commit b95d01c) |
+| 3 | F2 | Backtest setup + tarixda tasdiqlash | ⏳ Kod tayyor, real data bilan run kerak (F2-3, F2-4) |
 | 4 | F3 (demo) | 7 kun uzluksiz demo + stress test | — |
 | 5 | F3 (real) | Real $500, manual confirm → auto | — |
 | 6+ | F4 | Walk-forward, A/B, yaxshilashlar | — |

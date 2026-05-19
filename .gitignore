@@ -37,9 +37,18 @@ ai-trading-agent/data/state/
 ai-trading-agent/apps/data/state/
 .trade_meta_*.json
 
+# ─── F2-3: Historical market data (MT5'dan qayta yuklab olinadi) ────
+data/historical/
+ai-trading-agent/data/historical/
+
 # ─── F2-3: Backtest output (har run'da yangi UUID fayllari) ─────────
-reports/
-ai-trading-agent/reports/
+reports/*
+ai-trading-agent/reports/*
+# Qo'lda yozilgan acceptance/audit hisobotlari va .gitkeep — saqlanadi
+!reports/.gitkeep
+!ai-trading-agent/reports/.gitkeep
+!ai-trading-agent/reports/f2-*.md
+!ai-trading-agent/reports/*_acceptance_*.md
 
 # ─── IDE ──────────────────────────────────────────────────────────
 .vscode/
