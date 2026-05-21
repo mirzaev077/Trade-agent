@@ -94,9 +94,22 @@ class BacktestJournal:
         risk_check: RiskCheckResult,
         reflection: Any,
     ) -> None:
-        """Yangi pozitsiya ochilganini `backtest_trades` jadvaliga yozadi."""
+        """Yangi pozitsiya ochilganini `backtest_trades` jadvaliga yozadi.
+
+        Pending limit orderlar uchun (status="pending"): broker hali fill qilmagan,
+        shuning uchun `fill_price`/`commission`/`slippage` None. Bu fieldlarni
+        signaldan to'ldiramiz — pending fill `order.entry_price` ga (= signal.entry_price)
+        slippage'siz amalga oshadi, commission fill paytida hisoblanadi. Pending hech
+        qachon fill bo'lmasa, bu qatorda `exit_time=None` qolib, `get_closed_trades`
+        filtridan tushadi.
+        """
         if not order_result.success or order_result.ticket is None:
             return
+
+        is_pending = order_result.status == "pending"
+        recorded_entry = order_result.fill_price if not is_pending else signal.entry_price
+        recorded_commission = order_result.commission if not is_pending else 0.0
+        recorded_slippage = order_result.slippage if not is_pending else 0.0
 
         row = {
             "run_id": self.run_id,
@@ -104,12 +117,12 @@ class BacktestJournal:
             "symbol": signal.symbol,
             "direction": signal.direction,
             "lot": risk_check.lot_size,
-            "entry_price": order_result.fill_price,
+            "entry_price": recorded_entry,
             "entry_time": signal.timestamp,
             "sl": signal.sl,
             "tp": signal.tp,
-            "commission": order_result.commission,
-            "slippage": order_result.slippage,
+            "commission": recorded_commission,
+            "slippage": recorded_slippage,
             "swap": 0.0,
             "pnl": None,
             "exit_price": None,
@@ -142,8 +155,8 @@ class BacktestJournal:
             """,
             (
                 self.run_id, order_result.ticket, signal.symbol, signal.direction, risk_check.lot_size,
-                order_result.fill_price, signal.timestamp, signal.sl, signal.tp,
-                order_result.commission, order_result.slippage, 0.0,
+                recorded_entry, signal.timestamp, signal.sl, signal.tp,
+                recorded_commission, recorded_slippage, 0.0,
                 json.dumps(row["signal"], default=str), json.dumps(row["risk_check"], default=str),
                 signal.setup_type, signal.session, signal.day_of_week, signal.mode, row["regime"],
             ),

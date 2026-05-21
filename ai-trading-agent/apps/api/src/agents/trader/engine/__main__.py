@@ -345,8 +345,13 @@ def main(argv: list[str] | None = None) -> int:
 
     broker_summary = engine.broker.get_summary()
 
-    # F2-3: Compute performance report from journal + broker history
-    closed_trades = list(engine.broker.history)
+    # F2-3.1: Use journal trade rows (have setup_type/sl/session) rather than
+    # broker.history (ClosedTrade dataclass — no setup_type/sl). Without this,
+    # setup_breakdown collapses to "UNKNOWN" and avg_rr is always 0.0.
+    if hasattr(engine.journal, "get_closed_trades"):
+        closed_trades = engine.journal.get_closed_trades()
+    else:
+        closed_trades = list(engine.broker.history)
     equity_curve = engine.journal.get_equity_curve() if hasattr(engine.journal, "get_equity_curve") else []
     perf_report = perf.compute(
         closed_trades=closed_trades,

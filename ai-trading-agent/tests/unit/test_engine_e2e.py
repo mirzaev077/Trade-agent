@@ -169,9 +169,16 @@ def test_backtest_e2e_runs_to_completion(synthetic_data_dir: Path) -> None:
 
 
 def test_backtest_e2e_with_zero_trades(synthetic_data_dir: Path) -> None:
-    """Tight time window → no trades, no crash."""
+    """Engine handles 0-trade scenarios without crashing.
+
+    F2-3.1 Variant C: the multi-TF analyst readily finds zones in synthetic
+    data, so to force 0 trades we pass a blocked_setups frozenset that vetoes
+    every label the zone_finder can emit. This keeps the test honest about
+    its intent (engine survives the no-trade path) without depending on
+    accidental analyst-paradigm side-effects.
+    """
     start = datetime(2024, 1, 1, tzinfo=timezone.utc)
-    end = start + timedelta(hours=2)  # only 8 M15 bars — too short for any HTF bias
+    end = start + timedelta(hours=2)
 
     clock = VirtualClock(start=start, end=end)
     set_clock(clock)
@@ -199,7 +206,22 @@ def test_backtest_e2e_with_zero_trades(synthetic_data_dir: Path) -> None:
             timeframes=("M15", "H1", "H4"),
         )
 
-        analyst = ICTAnalyst(clock=clock, data=data)
+        # Force zero trades by blocking every label the zone_finder emits.
+        # Generated from labels seen in F2-3.1c smoke runs + suffix patterns.
+        block_all: set[str] = set()
+        for tf in ("D1", "H4", "H1", "M30", "M15"):
+            for suffix in (
+                "OB", "BB", "MB", "RB", "OTE", "DR_Eq", "CISD",
+                "PDH", "PDL", "AR_HI", "AR_LO", "LiqVoid",
+                "EQH", "EQL", "IDM_buy", "IDM_sell",
+                "BOS_S", "BOS_R",
+                "SSL_sweep", "BSL_sweep", "ERL_low_sweep", "ERL_high_sweep",
+                "EQL_sweep", "EQH_sweep",
+                "BULL", "BEAR", "BISI", "SIBI", "BPR", "IFVG",
+            ):
+                block_all.add(f"{tf}_{suffix}")
+
+        analyst = ICTAnalyst(clock=clock, data=data, blocked_setups=block_all)
         engine = BacktestEngine(config, analyst=analyst)
         analyst.clock = engine.clock
         analyst.data = engine.data

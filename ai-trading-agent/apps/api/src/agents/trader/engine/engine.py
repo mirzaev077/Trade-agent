@@ -190,11 +190,26 @@ class BacktestEngine:
         self._record_equity(now)
 
     def _trading_cycle(self, symbol: str) -> None:
-        """Analyst → Reflector → Risk → Broker → Journal pipeline (bitta cycle)."""
-        signal = self.analyst.analyze_market(symbol, self.config.timeframes)
-        if signal is None:
+        """Analyst → Reflector → Risk → Broker → Journal pipeline (bitta cycle).
+
+        F2-3.1 Variant C: ``analyze_market`` can return ``Signal | list[Signal] | None``.
+        ``None`` and empty list both mean "no signals this cycle". A single Signal is
+        wrapped to a 1-element list for uniform processing. Each signal is routed
+        independently — one may pass risk while another fails, and broker-level
+        rejection on one does not block the rest.
+        """
+        result = self.analyst.analyze_market(symbol, self.config.timeframes)
+        if result is None:
+            return
+        signals: list = result if isinstance(result, list) else [result]
+        if not signals:
             return
 
+        for signal in signals:
+            self._route_one_signal(signal)
+
+    def _route_one_signal(self, signal) -> None:
+        """Route a single Signal through reflector → risk → broker → journal."""
         reflection = self.reflector.evaluate_signal_sync(signal, market_context={})
         if reflection.block_reason is not None:
             self.journal.log_blocked_signal(signal, reflection)
@@ -205,19 +220,29 @@ class BacktestEngine:
             self.journal.log_rejected_signal(signal, risk_check)
             return
 
-        order_result = self.broker.place_order(
-            symbol=signal.symbol,
-            direction=signal.direction,
-            order_type="market",
-            lot=risk_check.lot_size,
-            sl=signal.sl,
-            tp=signal.tp,
-        )
+        if signal.is_limit:
+            order_result = self.broker.place_order(
+                symbol=signal.symbol,
+                direction=signal.direction,
+                order_type="limit",
+                lot=risk_check.lot_size,
+                entry=signal.entry_price,
+                sl=signal.sl,
+                tp=signal.tp,
+            )
+        else:
+            order_result = self.broker.place_order(
+                symbol=signal.symbol,
+                direction=signal.direction,
+                order_type="market",
+                lot=risk_check.lot_size,
+                sl=signal.sl,
+                tp=signal.tp,
+            )
 
         if order_result.success:
             self.journal.log_trade_opened(signal, order_result, risk_check, reflection)
         else:
-            # Broker rad qilgan → rejected signal sifatida journal'ga
             broker_reject = RiskCheckResult(
                 approved=False,
                 reason=f"BROKER_REJECTED:{order_result.error}",

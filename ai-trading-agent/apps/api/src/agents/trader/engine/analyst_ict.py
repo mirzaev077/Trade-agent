@@ -1,37 +1,19 @@
 """
-F2-2.E: MVP ICT analyst for backtest engine.
+F2-3.1 Variant C — ICTAnalyst with live `_find_all_ict_zones` paradigm.
 
-Bridges ``ICTAnalysis`` (production analyzer in ``analysis/ict.py``) to the
-BacktestEngine's ``analyze_market(symbol, timeframes) -> Signal | None``
-protocol.
+Strategy:
+  * Fetch D1 + H4 + H1 + M30 + M15 candles ending at ``clock.now()``
+  * Run ``ICTAnalysis.analyze`` per TF + compute ATR per TF
+  * HTF bias: D1 trend → want_dir, fallback to H4 trend, else None
+  * HTF confluence: count of D1/H4/H1/M30 confirming want_dir (0-4 score)
+  * Silver Bullet flag: in London or NY kill-zone hour
+  * Call ``zone_finder.find_all_ict_zones`` → list of zone dicts
+  * Convert each zone → ``Signal(is_limit=True)``
+  * Dedup by (direction, label, round(entry, 1)) — same zone emitted at most
+    once per analyst lifetime
 
-Strategy (MVP — intentionally simpler than production trader):
-
-  * Fetch H4 + H1 + M15 candles ending at ``clock.now()``
-  * Run ``ICTAnalysis.analyze`` on H4 and H1
-  * HTF bias: if ``H4.structure["trend"]`` is ``"bullish"``/``"bearish"``,
-    pick that as ``want_direction``; otherwise skip.
-  * Find an unmitigated H1 order block in the wanted direction.
-  * If current price is inside the OB zone AND the H1 ``pd_zone`` aligns
-    (buy → discount/equilibrium, sell → premium/equilibrium), emit a
-    ``Signal``:
-
-      - ``entry``: OB midpoint
-      - ``sl``:    OB other side + ``sl_buffer_pips`` buffer
-      - ``tp``:    entry ± SL-distance × ``rr_ratio`` (default 1:2 RR)
-
-  * Otherwise: return ``None``.
-
-Notes:
-  * No Claude calls, no learner dependency, no multi-TF zone weighting.
-    The production ``TraderAgent._find_all_ict_zones`` is ~200 LOC across
-    9 helpers — porting it is F2-3 scope.
-  * ICT order-block types are ``"bullish_ob"`` / ``"bearish_ob"`` (not
-    ``"buy"``/``"sell"``) — we map them explicitly here.
-  * VirtualClock returns whatever was passed to its constructor. The
-    BacktestConfig stores tz-aware UTC datetimes, so ``clock.now()`` is
-    tz-aware. If a caller wires a naive clock, we coerce to UTC before
-    constructing the Signal (Signal validates tz-awareness).
+The analyst returns ``list[Signal]`` — empty list means no signals this cycle.
+Engine iterates and routes each to broker as a pending limit.
 """
 
 from __future__ import annotations
@@ -43,6 +25,7 @@ from loguru import logger
 
 from apps.api.src.agents.trader.analysis.ict import ICTAnalysis
 from apps.api.src.agents.trader.core.data import HistoricalDataManager
+from apps.api.src.agents.trader.engine import zone_finder
 from apps.api.src.agents.trader.engine.signals import Signal
 
 
@@ -65,15 +48,6 @@ def _day_name(weekday: int) -> str:
     return ["mon", "tue", "wed", "thu", "fri", "sat", "sun"][weekday]
 
 
-def _ob_direction(ob_type: str) -> str | None:
-    """Map ICT OB ``type`` string (``bullish_ob``/``bearish_ob``) to ``buy``/``sell``."""
-    if "bullish" in ob_type:
-        return "buy"
-    if "bearish" in ob_type:
-        return "sell"
-    return None
-
-
 def _ensure_tz_aware(dt: datetime) -> datetime:
     """Coerce naive datetimes to UTC. Signal validates tz-awareness."""
     if dt.tzinfo is None:
@@ -81,24 +55,77 @@ def _ensure_tz_aware(dt: datetime) -> datetime:
     return dt
 
 
+def _is_silver_bullet(hour: int) -> bool:
+    """Silver Bullet kill-zone hour: London 10:00-11:00 UTC, NY 14:00-15:00 UTC."""
+    return hour in (10, 14)
+
+
+def _htf_confluence(want_dir: str, ict_map: dict) -> int:
+    """Live `_htf_confluence` port: count of D1/H4/H1/M30 confirming want_dir (0-4)."""
+    count = 0
+    want_trend = "bullish" if want_dir == "buy" else "bearish"
+    for tf in ("D1", "H4", "H1", "M30"):
+        ict = ict_map.get(tf)
+        if ict is None:
+            continue
+        structure = getattr(ict, "structure", {}) or {}
+        trend = structure.get("trend", "sideways")
+        bos = structure.get("bos", 0)
+        choch = structure.get("choch", False)
+        if trend == want_trend:
+            count += 1
+        elif bos > 0 and choch:
+            count += 1
+    return count
+
+
+def _bias_from_trends(d1_trend: str, h4_trend: str) -> str | None:
+    """D1 primary, H4 fallback. Returns 'buy' / 'sell' / None."""
+    for trend in (d1_trend, h4_trend):
+        if trend == "bullish":
+            return "buy"
+        if trend == "bearish":
+            return "sell"
+    return None
+
+
 # ── Analyst ──────────────────────────────────────────────────────────────────
 
 
 class ICTAnalyst:
-    """MVP ICT-based analyst — bridges ``ICTAnalysis`` to the backtest engine.
+    """Variant C ICT analyst — multi-TF zone discovery via live paradigm port.
 
-    :param clock: A clock object exposing ``.now() -> datetime`` (VirtualClock
-                  in backtest, RealClock in live). Used to anchor candle reads
-                  and stamp the emitted Signal.
+    :param clock: Clock with ``.now() -> datetime`` (VirtualClock in backtest).
     :param data: ``HistoricalDataManager`` (already preloaded by the engine).
-    :param params: Reserved for future ``AnalystParams`` injection — accepted
-                   for engine-construction compat; unused in MVP.
-    :param rr_ratio: Reward:Risk multiple for TP. 2.0 = fixed 1:2.
-    :param sl_buffer_pips: Extra pips added beyond OB opposite side for SL.
-    :param pip_size: Quote unit per pip. 0.10 = XAUUSD; 0.0001 = EURUSD; etc.
-    :param min_candles_per_tf: Minimum candles each TF must return; below this
-                               we return None (insufficient data).
+    :param params: Reserved for future ``AnalystParams`` injection; unused.
+    :param min_candles_per_tf: Skip TF if fewer than this many candles returned.
+    :param confluence_max_weight: Upper bound used to normalize zone weight
+        into ``Signal.confluence_score`` ([0, 1]). Live trader's strongest
+        weights typically land in the 30-80 range — 100.0 gives headroom.
+    :param max_signals_per_cycle: Cap on how many Signals we emit per call.
+        Live trader places up to 20; backtest can be tighter to reduce broker
+        margin churn.
     """
+
+    # Per-TF candle counts (mirror live agent.py `_tick`)
+    TF_CANDLE_COUNTS: dict[str, int] = {
+        "D1": 150,
+        "H4": 300,
+        "H1": 500,
+        "M30": 300,
+        "M15": 500,
+    }
+
+    # F2-3.1 Variant C smoke (2024-01, 1 month):
+    # - M15_OTE: 69 trades, PF 0.39 — dynamic fib on M15 = noise
+    # - M15_DR_Eq: 22 trades, PF 0.04 — DR equilibrium needs HTF context
+    # Live trader filters these via SelfLearner setup weights; backtest lacks
+    # that loop, so we block them by name. Direction-asymmetric performance
+    # (BEAR setups underperforming) is NOT blocked — could be 1-month bias.
+    DEFAULT_BLOCKED_SETUPS: frozenset[str] = frozenset({
+        "M15_OTE",
+        "M15_DR_Eq",
+    })
 
     def __init__(
         self,
@@ -106,19 +133,23 @@ class ICTAnalyst:
         data: HistoricalDataManager,
         params: Any = None,
         *,
-        rr_ratio: float = 2.0,
-        sl_buffer_pips: float = 5.0,
-        pip_size: float = 0.10,
         min_candles_per_tf: int = 50,
+        confluence_max_weight: float = 100.0,
+        max_signals_per_cycle: int = 8,
+        blocked_setups: set[str] | frozenset[str] | None = None,
     ) -> None:
         self.clock = clock
         self.data = data
         self.params = params
-        self.rr_ratio = rr_ratio
-        self.sl_buffer_pips = sl_buffer_pips
-        self.pip_size = pip_size
         self.min_candles_per_tf = min_candles_per_tf
+        self.confluence_max_weight = confluence_max_weight
+        self.max_signals_per_cycle = max_signals_per_cycle
+        self.blocked_setups = (
+            frozenset(blocked_setups) if blocked_setups is not None
+            else self.DEFAULT_BLOCKED_SETUPS
+        )
         self.ict = ICTAnalysis()
+        self._emitted_zone_keys: set[tuple] = set()
 
     # ── Public API expected by BacktestEngine._trading_cycle ─────────────────
 
@@ -126,109 +157,131 @@ class ICTAnalyst:
         self,
         symbol: str,
         timeframes: Iterable[str],
-    ) -> Signal | None:
-        """Return ONE ``Signal`` if all MVP conditions are met, else ``None``.
+    ) -> list[Signal]:
+        """Return zero or more limit-order ``Signal``s for this cycle.
 
-        Reads candles via ``self.data``; does not depend on any TraderAgent
-        state. The ``timeframes`` argument is accepted for protocol parity
-        with the engine but ignored — this MVP always reads H4/H1/M15.
+        Always returns a list. Empty list = no actionable zones this bar.
+
+        TF availability is dynamic: D1/M30 may be missing in some datasets
+        (live trader fetches from MT5; backtest may only have M15/H1/H4 parquets).
+        We skip unavailable TFs and degrade gracefully — bias falls back from
+        D1 → H4, confluence/zones use whatever TFs we have.
         """
         now = _ensure_tz_aware(self.clock.now())
 
-        # 1. Fetch candles for H4, H1, M15
-        try:
-            h4 = self.data.get_candles_at(symbol, "H4", now, count=200)
-            h1 = self.data.get_candles_at(symbol, "H1", now, count=300)
-            m15 = self.data.get_candles_at(symbol, "M15", now, count=500)
-        except KeyError as exc:
-            logger.debug("ICTAnalyst: data not loaded — {}", exc)
-            return None
-
-        for tf_name, df in (("H4", h4), ("H1", h1), ("M15", m15)):
+        # 1. Fetch candles per TF — skip missing TFs gracefully
+        candles_per_tf: dict[str, Any] = {}
+        for tf, count in self.TF_CANDLE_COUNTS.items():
+            try:
+                df = self.data.get_candles_at(symbol, tf, now, count=count)
+            except KeyError:
+                # TF not loaded — degrade gracefully
+                continue
+            except Exception as exc:
+                logger.debug("ICTAnalyst: {} data error — {}", tf, exc)
+                continue
             if df is None or len(df) < self.min_candles_per_tf:
-                logger.debug(
-                    "ICTAnalyst: insufficient {} candles ({}) — skip",
-                    tf_name,
-                    0 if df is None else len(df),
-                )
-                return None
+                continue
+            candles_per_tf[tf] = df
 
-        # 2. Run ICT on H4 + H1 (M15 only used for current price)
-        ict_h4 = self.ict.analyze(h4, "H4")
-        ict_h1 = self.ict.analyze(h1, "H1")
+        # Need at least one HTF (H4 or D1) and the primary LTF (M15) to operate
+        if "M15" not in candles_per_tf:
+            return []
+        if "D1" not in candles_per_tf and "H4" not in candles_per_tf:
+            return []
 
-        # 3. HTF bias from H4 trend
-        h4_trend = ict_h4.structure.get("trend", "sideways")
-        if h4_trend == "bullish":
-            want_dir = "buy"
-        elif h4_trend == "bearish":
-            want_dir = "sell"
-        else:
-            return None  # no clear HTF bias
+        # 2. Run ICT.analyze per TF + ATR
+        ict_map: dict[str, Any] = {}
+        atr_map: dict[str, float] = {}
+        for tf, df in candles_per_tf.items():
+            ict_map[tf] = self.ict.analyze(df, tf)
+            atr_map[tf] = self.ict._atr(df)
 
-        # 4. Find unmitigated H1 OB in want direction
-        obs = ict_h1.order_blocks or []
-        matching = [
-            ob
-            for ob in obs
-            if not ob.get("mitigated", False)
-            and _ob_direction(ob.get("type", "")) == want_dir
+        # 3. HTF bias (D1 primary, H4 fallback — whichever is loaded)
+        d1_trend = ict_map.get("D1").structure.get("trend", "sideways") if "D1" in ict_map else "sideways"
+        h4_trend = ict_map.get("H4").structure.get("trend", "sideways") if "H4" in ict_map else "sideways"
+        want_dir = _bias_from_trends(d1_trend, h4_trend)
+        if want_dir is None:
+            return []
+
+        # 4. HTF confluence (0-4 across whatever HTF TFs are loaded)
+        htf_conf = _htf_confluence(want_dir, ict_map)
+
+        # 5. Current price (last M15 close)
+        current_price = float(candles_per_tf["M15"].iloc[-1]["close"])
+
+        # 6. Silver Bullet flag
+        silver_bullet = _is_silver_bullet(now.hour)
+
+        # 7. Build tf_ict_data tuples — only loaded TFs
+        tf_ict_data = [
+            (tf, ict_map[tf], atr_map[tf], candles_per_tf[tf])
+            for tf in self.TF_CANDLE_COUNTS if tf in ict_map
         ]
-        if not matching:
-            return None
 
-        # Pick strongest unmitigated OB
-        ob = max(matching, key=lambda o: o.get("strength", 0.0))
-
-        # 5. Current price must be INSIDE the OB zone
-        current_close = float(m15.iloc[-1]["close"])
-        ob_top = float(ob.get("high", 0.0))
-        ob_bot = float(ob.get("low", 0.0))
-        if ob_top <= ob_bot:
-            return None  # malformed OB
-        if not (ob_bot <= current_close <= ob_top):
-            return None  # price not in the zone yet
-
-        # 6. PD-zone alignment (H1)
-        pd_zone = ict_h1.pd_zone
-        if want_dir == "buy" and pd_zone not in ("discount", "equilibrium"):
-            return None
-        if want_dir == "sell" and pd_zone not in ("premium", "equilibrium"):
-            return None
-
-        # 7. Compute entry / SL / TP
-        entry = (ob_top + ob_bot) / 2.0
-        sl_buffer = self.sl_buffer_pips * self.pip_size
-        if want_dir == "buy":
-            sl = ob_bot - sl_buffer
-            tp = entry + abs(entry - sl) * self.rr_ratio
-        else:
-            sl = ob_top + sl_buffer
-            tp = entry - abs(entry - sl) * self.rr_ratio
-
-        # 8. Confluence score: OB strength normalised to [0, 1].
-        # ICTAnalysis caps strength at 3.0 (see _order_blocks); divide for
-        # range stability. Fall back to 0.5 if absent.
-        raw_strength = float(ob.get("strength", 0.5))
-        confluence_score = max(0.0, min(1.0, raw_strength / 3.0))
-
-        return Signal(
-            symbol=symbol,
-            direction=want_dir,
-            entry_price=entry,
-            sl=sl,
-            tp=tp,
-            confluence_score=confluence_score,
-            setup_type="H1_OB",
-            session=_session_from_hour(now.hour),
-            day_of_week=_day_name(now.weekday()),
-            mode="sniper",
-            timestamp=now,
-            metadata={
-                "h4_trend": h4_trend,
-                "h1_pd_zone": pd_zone,
-                "ob_strength": raw_strength,
-                "ob_high": ob_top,
-                "ob_low": ob_bot,
-            },
+        # 8. Find all zones
+        zones = zone_finder.find_all_ict_zones(
+            want_dir=want_dir,
+            price=current_price,
+            tf_ict_data=tf_ict_data,
+            want_trend=want_dir,
+            htf_conf=htf_conf,
+            silver_bullet=silver_bullet,
         )
+        if not zones:
+            return []
+
+        # 9. Convert zones → Signals (dedup + max cap)
+        signals: list[Signal] = []
+        session = _session_from_hour(now.hour)
+        day = _day_name(now.weekday())
+
+        for zone in zones:
+            label = zone.get("label", "UNKNOWN")
+            if label in self.blocked_setups:
+                continue
+            entry = float(zone["entry"])
+            direction = zone["direction"]
+            zone_key = (direction, label, round(entry, 1))
+            if zone_key in self._emitted_zone_keys:
+                continue
+
+            tp = float(zone.get("tp1", zone.get("tp2", entry)))
+            sl = float(zone["sl"])
+            weight = float(zone.get("weight", 0.0))
+            confluence_score = max(0.0, min(1.0, weight / self.confluence_max_weight))
+
+            self._emitted_zone_keys.add(zone_key)
+
+            signals.append(Signal(
+                symbol=symbol,
+                direction=direction,
+                entry_price=entry,
+                sl=sl,
+                tp=tp,
+                confluence_score=confluence_score,
+                setup_type=label,
+                session=session,
+                day_of_week=day,
+                mode="sniper",
+                timestamp=now,
+                is_limit=True,
+                metadata={
+                    "tf": zone.get("tf"),
+                    "zone_lo": zone.get("zone_lo"),
+                    "zone_hi": zone.get("zone_hi"),
+                    "tp1": zone.get("tp1"),
+                    "tp2": zone.get("tp2"),
+                    "tp3": zone.get("tp3"),
+                    "weight": weight,
+                    "htf_conf": zone.get("htf_conf", htf_conf),
+                    "silver_bullet": zone.get("silver_bullet", silver_bullet),
+                    "d1_trend": d1_trend,
+                    "h4_trend": h4_trend,
+                },
+            ))
+
+            if len(signals) >= self.max_signals_per_cycle:
+                break
+
+        return signals

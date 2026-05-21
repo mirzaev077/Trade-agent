@@ -210,3 +210,99 @@ class TestRunRequiresAnalyst:
         assert eng.analyst is None
         with pytest.raises(RuntimeError, match="analyst"):
             eng.run()
+
+
+class TestLimitOrderRouting:
+    """F2-3.1: _trading_cycle must route ``signal.is_limit=True`` to a pending
+    limit order (with explicit ``entry``), and ``is_limit=False`` to market."""
+
+    def _make_signal(self, *, is_limit: bool):
+        from apps.api.src.agents.trader.engine.signals import Signal
+
+        return Signal(
+            symbol="EURUSD",
+            direction="buy",
+            entry_price=1.1000,
+            sl=1.0950,
+            tp=1.1100,
+            confluence_score=0.7,
+            setup_type="H1_OB",
+            session="london",
+            day_of_week="wed",
+            mode="sniper",
+            timestamp=datetime(2026, 5, 13, 10, tzinfo=timezone.utc),
+            is_limit=is_limit,
+        )
+
+    def _wired_engine(self, tmp_path: Path):
+        from apps.api.src.agents.trader.engine.signals import RiskCheckResult
+
+        eng = _engine(tmp_path)
+        eng.analyst = MagicMock()
+        eng.broker = MagicMock()
+        eng.broker.place_order.return_value = MagicMock(
+            success=True, ticket=999, error=None, status="pending"
+        )
+        eng.risk = MagicMock()
+        eng.risk.approve_trade.return_value = RiskCheckResult(
+            approved=True, reason="ok", lot_size=0.1, risk_amount_usd=50.0, risk_pct=0.5,
+        )
+        eng.reflector = MagicMock()
+        eng.reflector.evaluate_signal_sync.return_value = MagicMock(
+            block_reason=None, confidence=0.8, notes="", adjustments=[]
+        )
+        eng.journal = MagicMock()
+        return eng
+
+    def test_limit_signal_routes_to_limit_order(self, tmp_path: Path) -> None:
+        eng = self._wired_engine(tmp_path)
+        eng.analyst.analyze_market.return_value = self._make_signal(is_limit=True)
+
+        eng._trading_cycle("EURUSD")
+
+        call = eng.broker.place_order.call_args
+        assert call.kwargs["order_type"] == "limit"
+        assert call.kwargs["entry"] == pytest.approx(1.1000)
+        assert call.kwargs["direction"] == "buy"
+        assert call.kwargs["sl"] == pytest.approx(1.0950)
+        assert call.kwargs["tp"] == pytest.approx(1.1100)
+
+    def test_market_signal_routes_to_market_order(self, tmp_path: Path) -> None:
+        eng = self._wired_engine(tmp_path)
+        eng.analyst.analyze_market.return_value = self._make_signal(is_limit=False)
+
+        eng._trading_cycle("EURUSD")
+
+        call = eng.broker.place_order.call_args
+        assert call.kwargs["order_type"] == "market"
+        assert "entry" not in call.kwargs  # market orders don't pass entry
+
+    def test_list_signal_routes_each_independently(self, tmp_path: Path) -> None:
+        """F2-3.1 Variant C: analyze_market may return list[Signal]; the engine
+        must route each through the pipeline (one broker call per signal)."""
+        eng = self._wired_engine(tmp_path)
+        eng.analyst.analyze_market.return_value = [
+            self._make_signal(is_limit=True),
+            self._make_signal(is_limit=True),
+            self._make_signal(is_limit=True),
+        ]
+
+        eng._trading_cycle("EURUSD")
+
+        assert eng.broker.place_order.call_count == 3
+
+    def test_empty_list_is_noop(self, tmp_path: Path) -> None:
+        eng = self._wired_engine(tmp_path)
+        eng.analyst.analyze_market.return_value = []
+
+        eng._trading_cycle("EURUSD")
+
+        eng.broker.place_order.assert_not_called()
+
+    def test_none_is_noop(self, tmp_path: Path) -> None:
+        eng = self._wired_engine(tmp_path)
+        eng.analyst.analyze_market.return_value = None
+
+        eng._trading_cycle("EURUSD")
+
+        eng.broker.place_order.assert_not_called()

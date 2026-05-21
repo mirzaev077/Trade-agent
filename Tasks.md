@@ -165,10 +165,20 @@ Quyidagi muammolar hal qilindi:
   - Max DD < 15% — n/a
   - Min 100 ta trade (statistik ahamiyat uchun) — ❌ 0
 
-### F2-3.1: ICTAnalyst limit-order fix (yangi, F2-3 REJECT natijasidan) 🔴
-- [ ] **Variant B (tavsiya):** Signal'ga `is_limit=True` qo'shib PaperBroker'da pending limit support — ~50 satr
-- [ ] Yoki **Variant C:** live `_find_all_ict_zones` to'liq port (~200 satr) — F3'gacha kerak
-- [ ] Tuzatishdan keyin 2024-2025 acceptance run'ni qaytarish
+### F2-3.1: ICTAnalyst limit-order fix (F2-3 REJECT natijasidan) 🟢
+- [x] **Variant B:** `Signal.is_limit` + analyst dedup + engine routing + journal pending-status (2026-05-21, +5 yangi test, 248/248 pass)
+- [x] Wire-fix: `__main__.py` endi `journal.get_closed_trades()`'dan o'qiydi (broker.history o'rniga) — chunki `ClosedTrade`'da `setup_type/sl` yo'q.
+- [x] **Smoke B 1 oy:** 4 trade (0→4), PF=0.60, setup=H1_OB ✓
+- [x] **Variant C:** live `_find_all_ict_zones` to'liq port (2026-05-21):
+  - `engine/zone_finder.py` (~700 satr) — 12 pure helper + main dispatcher (15 ICT zone turi)
+  - `ICTAnalyst.analyze_market` qayta yozildi — D1/H4/H1/M30/M15 multi-TF, `list[Signal]` qaytaradi, graceful TF degradation, OB dedup
+  - `BacktestEngine._trading_cycle` `list[Signal]`'ni iteratsiya qiladi (har biri alohida marshrutlanadi)
+  - `blocked_setups` mexanizmi — SelfLearner o'rnini bosadi (backtest'da learner loop yo'q)
+  - +30 yangi test (25 zone_finder, 5 list-routing, 3 filter); 281/281 pytest pass
+- [x] **Smoke C 1 oy (filterless):** 314 trade, WR=42%, PF=0.72, PnL=-$99 — multi-TF infra ishlayapti
+- [x] **Smoke C 1 oy (filtered M15_OTE+M15_DR_Eq):** 223 trade, WR=47.5%, PF=0.96, PnL=-$10.20 (breakeven yaqin)
+- [ ] **Acceptance:** 24 oy 2024-2025 acceptance run (~3 soat) — joriy filter bilan haqiqiy verdict
+- [ ] (Optional) D1 + M30 ma'lumotini yuklash → to'liq paradigma (`scripts/download_mt5_history.py`)
 
 ### F2-4: Demo natijalarini hisobot qilish 🟡
 - [ ] Hozirgi `learned.json` + `trades.csv` ni o'qib, real demo natijalarini hisoblash:

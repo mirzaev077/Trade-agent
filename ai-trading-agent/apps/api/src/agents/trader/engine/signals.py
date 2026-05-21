@@ -36,6 +36,8 @@ class Signal:
     :param day_of_week: Hafta kuni: 'mon' | 'tue' | ... | 'sun'
     :param mode: Analyst mode: 'sniper' | 'flow'
     :param timestamp: Signal yaratilgan vaqt (tz-aware UTC majburiy)
+    :param is_limit: True bo'lsa, engine pending limit order qo'yadi (entry_price'ga
+                     narx qaytishini kutadi). False (default) — market order.
     :param metadata: Qo'shimcha analyst ma'lumotlari (HTF bias, manipulation, scores)
     """
 
@@ -51,6 +53,7 @@ class Signal:
     mode: str
     timestamp: datetime
     signal_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    is_limit: bool = False
     metadata: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
