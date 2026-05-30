@@ -220,7 +220,8 @@ Quyidagi muammolar hal qilindi:
 - [x] Telegram bot'ga `/status`, `/positions`, `/pause`, `/resume` commandlari qo'shish *(2026-05-23: `telegram_bot.py` ga inbound polling + command registry + auth; yangi `telegram_commands.py` 4 ta handler; `tests/unit/test_telegram_commands.py` 19 test pass)*
 - [x] **main.py wire-up** *(2026-05-30: `telegram_commands.wire_up(agent)` helper — register_all + start_polling birga; idempotent (start_polling internal dedup); TELEGRAM_BOT_TOKEN yo'q bo'lsa graceful no-op (`_ENABLED=False` tekshiruv); main.py `_run_agent()` ga ulandi, finally'da stop_polling; +5 test (registers 4 cmd, skip polling when disabled, start when enabled, idempotent across reloads, custom bot_module injection); 396/396 pytest pass)*
 - [ ] Watchdog ishga tushirilgan bo'lsin (`scripts/watchdog.ps1`)
-- [ ] Daily summary 23:00 UTC'da avtomatik Telegram'ga: PnL, trades, win rate, DD
+- [x] **Daily summary generator** *(2026-05-30: `analysis/daily_summary.py` (~190 satr) — `DailySummaryConfig`/`DailySummaryResult`, UTC day window (half-open 00:00→24:00), reuses weekly_report CSV+filter+equity infra, PnL/WR/PF/intraday DD/best-setup, BE trades shown separately from L; CLI `python -m apps.api.src.agents.trader.analysis.daily_summary --balance X [--date YYYY-MM-DD]`; 14 test pass; 410/410 total)*
+- [ ] **Scheduler wire-up:** 23:00 UTC'da daily_summary.generate() + telegram_bot.send — F4 scheduler fazasida
 
 ### Faza 3 Acceptance
 - [ ] 7 kun real'da uzluksiz ishlaydi
