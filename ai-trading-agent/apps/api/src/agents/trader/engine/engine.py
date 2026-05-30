@@ -21,6 +21,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from loguru import logger
+
 from apps.api.src.agents.trader.core.broker import PaperBroker
 from apps.api.src.agents.trader.core.clock import BacktestComplete, VirtualClock
 from apps.api.src.agents.trader.core.data import HistoricalDataManager
@@ -80,6 +82,8 @@ class BacktestEngine:
     :param db_conn: Sync DB connection BacktestJournal uchun (None = in-memory only)
     """
 
+    PROGRESS_EVERY_BARS = 1000  # default per-bar log frequency
+
     def __init__(
         self,
         config: BacktestConfig,
@@ -87,6 +91,7 @@ class BacktestEngine:
         reflector: Any = None,
         risk: Any = None,
         db_conn: Any = None,
+        progress_every_bars: int | None = None,
     ) -> None:
         self.config = config
 
@@ -106,6 +111,12 @@ class BacktestEngine:
         self._last_history_len: int = 0
         # Tracker: oldingi clock tick (session boundary detection)
         self._last_tick: datetime | None = None
+        # F2 hot-fix: progress logging — uzun runlarda jim qolmaslik uchun.
+        # 0 yoki manfiy qiymat → progress log o'chiriladi.
+        self._progress_every_bars: int = (
+            progress_every_bars if progress_every_bars is not None
+            else self.PROGRESS_EVERY_BARS
+        )
 
     # ── Public ────────────────────────────────────────────────────────────────
 
@@ -135,10 +146,25 @@ class BacktestEngine:
         step = self._primary_step()
         symbol = self.config.symbol
 
+        # F2 hot-fix: progress tracking — uzun runlarda jim qolmaslik uchun
+        bars_processed = 0
+        total_bars_est = self._estimate_total_bars(step)
+        if self._progress_every_bars > 0:
+            logger.info(
+                f"[progress] est. total bars = {total_bars_est}, "
+                f"log every {self._progress_every_bars}"
+            )
+
         try:
             while not self.clock.is_finished():
                 self._tick(symbol)
                 self.clock.advance(step)
+                bars_processed += 1
+                if (
+                    self._progress_every_bars > 0
+                    and bars_processed % self._progress_every_bars == 0
+                ):
+                    self._log_progress(bars_processed, total_bars_est, started_at)
         except BacktestComplete:
             pass
 
@@ -154,6 +180,47 @@ class BacktestEngine:
         self.journal.log_run_ended(result_dict=result.to_dict())
 
         return result
+
+    # ── Progress logging ──────────────────────────────────────────────────────
+
+    def _estimate_total_bars(self, step: timedelta) -> int:
+        """Estimate total bars between config.start and config.end (best-effort).
+
+        Bu son aniq emas (calendar gaps, weekend candles HistoricalDataManager
+        tomonidan filterlanadi), lekin progress ETA va foiz hisobi uchun
+        yetarli aniqlik beradi.
+        """
+        try:
+            total_sec = (self.config.end - self.config.start).total_seconds()
+            step_sec = step.total_seconds() or 1.0
+            return max(1, int(total_sec / step_sec))
+        except Exception:  # noqa: BLE001
+            return 1
+
+    def _log_progress(
+        self,
+        bars_done: int,
+        total_bars: int,
+        started_at: datetime,
+    ) -> None:
+        """One-line progress log. Tezligi, ETA va trade count'ni ko'rsatadi."""
+        elapsed = (datetime.now(tz=timezone.utc) - started_at).total_seconds()
+        pct = (bars_done / total_bars) * 100.0 if total_bars else 0.0
+        bps = bars_done / elapsed if elapsed > 0 else 0.0
+        eta_sec = (total_bars - bars_done) / bps if bps > 0 else 0.0
+        try:
+            market_ts = self.clock.now().strftime("%Y-%m-%d %H:%M")
+        except Exception:  # noqa: BLE001
+            market_ts = "?"
+        trades_closed = len(getattr(self.broker, "history", []) or [])
+        logger.info(
+            f"[progress] {market_ts} | "
+            f"bars {bars_done}/{total_bars} ({pct:.1f}%) | "
+            f"trades {trades_closed} | "
+            f"elapsed {elapsed:.0f}s | "
+            f"bps {bps:.1f} | "
+            f"ETA {eta_sec:.0f}s"
+        )
 
     # ── Bar tick ──────────────────────────────────────────────────────────────
 

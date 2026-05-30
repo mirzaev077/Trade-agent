@@ -165,6 +165,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="F2-3: generate reports/<run_id>.html alongside the JSON.",
     )
     p.add_argument(
+        "--progress-every-bars",
+        type=int,
+        default=1000,
+        help=(
+            "Engine'da har N bar'da progress log emit qiladi (default: 1000). "
+            "0 yoki manfiy → log o'chiriladi."
+        ),
+    )
+    p.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -334,7 +343,11 @@ def main(argv: list[str] | None = None) -> int:
     # from `config`. We pass the analyst that already references our preloaded
     # data; the analyst.data and engine.data are independent instances pointed
     # at the same data_path, which is fine for read-only access.
-    engine = BacktestEngine(config, analyst=analyst)
+    engine = BacktestEngine(
+        config,
+        analyst=analyst,
+        progress_every_bars=args.progress_every_bars,
+    )
     # Make the analyst use the engine's clock + data so the analyst reads
     # the same simulated time as the engine's loop.
     analyst.clock = engine.clock
