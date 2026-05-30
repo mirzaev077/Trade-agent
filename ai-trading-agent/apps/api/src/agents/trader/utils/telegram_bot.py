@@ -1,12 +1,22 @@
 """
-TelegramBot — asinxron xabar yuborish.
+TelegramBot — asinxron xabar yuborish + inbound komandalar polling.
 BOT_TOKEN va CHAT_ID .env dan o'qiladi.
 Xato bo'lsa jimgina o'tkazib yuboradi (trading to'xtatilmaydi).
+
+F3 (2026-05-23): inbound command polling.
+  • `register_command("status", fn)` — `/status` keladi → `fn(args)` qaytargan
+    matnni javob qiladi.
+  • `start_polling(interval=2.0)` — daemon thread'da getUpdates loop.
+  • `stop_polling()` — graceful.
+  • Auth: faqat _CHAT_ID ga teng `from.id` dan keladigan xabarlar qabul qilinadi.
 """
 import os
 import json
+import threading
+import time
 import urllib.request
 import urllib.error
+from typing import Callable
 from loguru import logger
 
 try:
@@ -19,6 +29,12 @@ _TOKEN   = ""
 _CHAT_ID = ""
 _BASE    = "https://api.telegram.org/bot{token}/sendMessage"
 _ENABLED = False
+
+# F3: inbound command infrastructure
+_HANDLERS: dict[str, Callable[[str], str]] = {}
+_LAST_UPDATE_ID: int = 0
+_POLL_STOP: threading.Event = threading.Event()
+_POLL_THREAD: threading.Thread | None = None
 
 
 def init(token: str, chat_id: str):
@@ -265,6 +281,167 @@ def notify_shutdown(reason: str) -> None:
         _send_sync(msg)
     except Exception as e:  # noqa: BLE001
         logger.error(f"[notify_shutdown] xato: {e}")
+
+
+# ── F3: Inbound command polling ───────────────────────────────────────────────
+
+_GETUPDATES_URL = "https://api.telegram.org/bot{token}/getUpdates"
+
+
+def register_command(name: str, handler: Callable[[str], str]) -> None:
+    """Komandani ro'yxatga olish.
+
+    :param name: komanda nomi `/` belgisisiz (masalan: "status")
+    :param handler: argument matnini (komandadan keyingi qism) qabul qiladi
+                    va Telegram'ga qaytadigan matnni qaytaradi.
+    """
+    _HANDLERS[name.lower().lstrip("/")] = handler
+
+
+def unregister_command(name: str) -> None:
+    """Komandani olib tashlash (asosan testlar uchun)."""
+    _HANDLERS.pop(name.lower().lstrip("/"), None)
+
+
+def list_commands() -> list[str]:
+    """Ro'yxatga olingan komandalar nomlari (asosan testlar uchun)."""
+    return sorted(_HANDLERS.keys())
+
+
+def _parse_command(text: str) -> tuple[str, str] | None:
+    """`/cmd args` matnini (cmd, args) ga ajratadi. None — komanda emas."""
+    if not text or not text.startswith("/"):
+        return None
+    body = text[1:].strip()
+    if not body:
+        return None
+    # `/cmd@botname args` formatini ham qabul qilamiz
+    head, _, rest = body.partition(" ")
+    cmd = head.split("@", 1)[0].lower()
+    return cmd, rest.strip()
+
+
+def dispatch_command(text: str, from_chat_id: str | int) -> str | None:
+    """Bitta inbound xabar uchun command dispatch.
+
+    :return: javob matni yoki None (komanda noma'lum / auth fail / matn yo'q).
+    """
+    # 1) Auth — faqat ma'lum chat_id ruxsat etiladi
+    try:
+        if str(from_chat_id) != str(_CHAT_ID or "").strip():
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+
+    parsed = _parse_command(text)
+    if parsed is None:
+        return None
+
+    cmd, args = parsed
+    handler = _HANDLERS.get(cmd)
+    if handler is None:
+        return f"❓ Noma'lum komanda: /{cmd}\nMavjud: " + ", ".join(
+            f"/{c}" for c in list_commands()
+        )
+
+    try:
+        return handler(args)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"[telegram dispatch /{cmd}] handler xato: {e}")
+        return f"⚠️ Komanda bajarilishda xato: {e}"
+
+
+def _fetch_updates(timeout: int = 25) -> list[dict]:
+    """getUpdates long-poll. _LAST_UPDATE_ID dan keyingi xabarlarni qaytaradi."""
+    token, _ = _resolve_token_chat()
+    if not token:
+        return []
+    url = _GETUPDATES_URL.format(token=token)
+    params = {
+        "offset": _LAST_UPDATE_ID + 1,
+        "timeout": timeout,
+        "allowed_updates": ["message"],
+    }
+    payload = json.dumps(params).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout + 5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
+        logger.debug(f"[telegram getUpdates] HTTP xato: {e}")
+        return []
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"[telegram getUpdates] parse xato: {e}")
+        return []
+    if not isinstance(data, dict) or not data.get("ok"):
+        return []
+    return data.get("result", []) or []
+
+
+def _process_update(update: dict) -> None:
+    """Bitta getUpdates result element'ini qayta ishlash."""
+    global _LAST_UPDATE_ID
+    uid = update.get("update_id")
+    if isinstance(uid, int):
+        _LAST_UPDATE_ID = max(_LAST_UPDATE_ID, uid)
+
+    msg = update.get("message") or {}
+    text = (msg.get("text") or "").strip()
+    chat = msg.get("chat") or {}
+    chat_id = chat.get("id")
+    if not text or chat_id is None:
+        return
+
+    reply = dispatch_command(text, chat_id)
+    if reply:
+        _send_sync(reply)
+
+
+def _poll_loop(interval: float) -> None:
+    """Daemon thread loop. _POLL_STOP set bo'lsa to'xtaydi."""
+    logger.info("[telegram polling] boshlandi")
+    while not _POLL_STOP.is_set():
+        updates = _fetch_updates(timeout=25)
+        for u in updates:
+            try:
+                _process_update(u)
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"[telegram polling] process xato: {e}")
+        # Long-poll'dan tashqari minimal interval
+        _POLL_STOP.wait(timeout=max(0.1, interval))
+    logger.info("[telegram polling] to'xtatildi")
+
+
+def start_polling(interval: float = 2.0) -> None:
+    """Background thread'da getUpdates loop'ni boshlash.
+
+    Idempotent: ikkinchi marta chaqirilsa, log emas, no-op.
+    """
+    global _POLL_THREAD
+    if not _ENABLED:
+        logger.debug("[telegram polling] bot o'chirilgan — boshlanmaydi")
+        return
+    if _POLL_THREAD is not None and _POLL_THREAD.is_alive():
+        return
+    _POLL_STOP.clear()
+    _POLL_THREAD = threading.Thread(
+        target=_poll_loop, args=(interval,), name="telegram-poll", daemon=True
+    )
+    _POLL_THREAD.start()
+
+
+def stop_polling(timeout: float = 5.0) -> None:
+    """Polling thread'ni graceful to'xtatish."""
+    global _POLL_THREAD
+    _POLL_STOP.set()
+    if _POLL_THREAD is not None and _POLL_THREAD.is_alive():
+        _POLL_THREAD.join(timeout=timeout)
+    _POLL_THREAD = None
 
 
 def notify_pending_adjustment_sync(
