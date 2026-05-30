@@ -204,3 +204,27 @@ class TraderCommands:
         bot_module.register_command("positions", self.cmd_positions)
         bot_module.register_command("pause", self.cmd_pause)
         bot_module.register_command("resume", self.cmd_resume)
+
+
+def wire_up(
+    agent: Any,
+    *,
+    bot_module: Any = _tg,
+    start_polling: bool = True,
+    poll_interval: float = 2.0,
+) -> bool:
+    """
+    Convenience: register the 4 trader commands and start the inbound
+    long-polling daemon. Idempotent — safe to call across hot-reloads
+    (telegram_bot.start_polling is itself idempotent).
+
+    Returns True if polling was requested and the bot is enabled
+    (i.e. TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID present); False otherwise.
+    """
+    TraderCommands(agent).register_all(bot_module=bot_module)
+    if not start_polling:
+        return False
+    if not getattr(bot_module, "_ENABLED", False):
+        return False
+    bot_module.start_polling(interval=poll_interval)
+    return True

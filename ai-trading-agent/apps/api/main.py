@@ -23,7 +23,9 @@ from src.agents.trader import TraderAgent, TradingConfig
 from src.agents.trader.utils.telegram_bot import (
     notify_crash as _tg_notify_crash,
     notify_shutdown as _tg_notify_shutdown,
+    stop_polling as _tg_stop_polling,
 )
+from src.agents.trader.utils.telegram_commands import wire_up as _tg_wire_up
 from src.agents.trader.health import HealthState, start_health_server_in_thread
 
 # F1-4: bot ishga tushganda yagona shared state — agent va FastAPI o'rtasida
@@ -333,6 +335,14 @@ async def _run_agent(config: TradingConfig) -> bool:
         logger.error(f"MT5 ulanish xatosi: {e}")
         return False
 
+    # F3 wire-up: /status /positions /pause /resume + inbound polling thread.
+    # No-op if TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID are missing.
+    try:
+        if _tg_wire_up(agent):
+            logger.info("[telegram] inbound commands ulandi (/status /positions /pause /resume)")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[telegram] wire-up xato: {e}")
+
     logger.info(
         f"Trading boshlandi! {config.symbol} "
         f"har {config.scan_interval}s scan. "
@@ -346,6 +356,10 @@ async def _run_agent(config: TradingConfig) -> bool:
         agent.running = False
     finally:
         watcher.stop()
+        try:
+            _tg_stop_polling()
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"[telegram] stop_polling xato: {e}")
 
     return restart_flag[0]
 

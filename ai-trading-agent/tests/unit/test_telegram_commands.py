@@ -249,3 +249,74 @@ def test_resume_after_auto_pause_mentions_auto(fake_agent):
     out = TraderCommands(fake_agent).cmd_resume("")
     assert "RESUMED" in out
     assert "AUTO" in out  # avval auto-pause edi
+
+
+# ── wire_up() ─────────────────────────────────────────────────────────────────
+
+
+def test_wire_up_registers_all_four_commands(fake_agent, tg_chat_setup):
+    from apps.api.src.agents.trader.utils.telegram_commands import wire_up
+    wire_up(fake_agent, start_polling=False)
+    cmds = set(tg.list_commands())
+    assert {"status", "positions", "pause", "resume"}.issubset(cmds)
+
+
+def test_wire_up_skips_polling_when_disabled(fake_agent, tg_chat_setup, monkeypatch):
+    """No TELEGRAM_BOT_TOKEN → _ENABLED is False → polling thread is not started."""
+    from apps.api.src.agents.trader.utils.telegram_commands import wire_up
+    monkeypatch.setattr(tg, "_ENABLED", False, raising=False)
+    started_marker = {"called": False}
+
+    def fake_start_polling(*a, **kw):
+        started_marker["called"] = True
+
+    monkeypatch.setattr(tg, "start_polling", fake_start_polling)
+    ok = wire_up(fake_agent, start_polling=True)
+    assert ok is False
+    assert started_marker["called"] is False
+
+
+def test_wire_up_starts_polling_when_enabled(fake_agent, tg_chat_setup, monkeypatch):
+    from apps.api.src.agents.trader.utils.telegram_commands import wire_up
+    monkeypatch.setattr(tg, "_ENABLED", True, raising=False)
+    captured = {"interval": None, "called": False}
+
+    def fake_start_polling(interval: float = 2.0):
+        captured["called"] = True
+        captured["interval"] = interval
+
+    monkeypatch.setattr(tg, "start_polling", fake_start_polling)
+    ok = wire_up(fake_agent, start_polling=True, poll_interval=3.5)
+    assert ok is True
+    assert captured["called"] is True
+    assert captured["interval"] == 3.5
+
+
+def test_wire_up_idempotent_across_reloads(fake_agent, tg_chat_setup, monkeypatch):
+    """Hot reload may re-call wire_up; the underlying start_polling is itself idempotent."""
+    from apps.api.src.agents.trader.utils.telegram_commands import wire_up
+    monkeypatch.setattr(tg, "_ENABLED", True, raising=False)
+    calls = {"n": 0}
+
+    def fake_start_polling(interval: float = 2.0):
+        calls["n"] += 1
+
+    monkeypatch.setattr(tg, "start_polling", fake_start_polling)
+    wire_up(fake_agent)
+    wire_up(fake_agent)
+    # Both calls should reach start_polling (it dedupes internally via _POLL_THREAD)
+    assert calls["n"] == 2
+    # Handlers should still be there exactly once
+    assert tg.list_commands().count("status") == 1
+
+
+def test_wire_up_uses_custom_bot_module(fake_agent):
+    """wire_up accepts an injected bot module — useful for tests + isolation."""
+    from apps.api.src.agents.trader.utils.telegram_commands import wire_up
+    fake_bot = MagicMock(name="fake_bot")
+    fake_bot._ENABLED = True
+    ok = wire_up(fake_agent, bot_module=fake_bot, poll_interval=1.0)
+    assert ok is True
+    # 4 commands registered on the injected module
+    assert fake_bot.register_command.call_count == 4
+    fake_bot.start_polling.assert_called_once_with(interval=1.0)
