@@ -33,7 +33,7 @@
 8. ~~0 ta unit test~~ → `tests/unit/test_smoke.py` 22 test + 132 TMAS port test + pyproject.toml ruff/pytest config
 
 ### 🔴 Hali qoldi
-- **F1-1 oxirgi test:** 50-trade end-to-end scenario (evolve → propose → DB check) — admin_cli unit test bor, lekin explicit 50-trade flow yo'q
+- ~~F1-1 oxirgi test: 50-trade end-to-end scenario~~ → **2026-05-23 yakunlandi**: `tests/unit/test_self_learner_50_trades.py` (3 ta test, 284/284 pytest pass)
 - **F2-3.1 ICTAnalyst limit-order fix:** 2026-05-19 da real 2024-2025 XAUUSD backtest run qilindi → **REJECT (0 trade)**. Sabab: MVP analyst eng kuchli OB tanlaydi, narx zonada bo'lishini kutadi — 49.7% bar'da narx OB'dan uzoq. Fix: limit-order support (Variant B) yoki `_find_all_ict_zones` to'liq port (Variant C). Batafsil: `reports/f2-3_acceptance_2024-2025.md`
 
 ### 🟡 Live'ga halaqit qilmaydi, lekin operatsion xavfli
@@ -78,7 +78,7 @@ Quyidagi muammolar hal qilindi:
   - `... reject <id> --reason "..."` 
   - `... auto-reject` — 24 soat o'tganlarni
 - [x] Telegram: yangi `pending_adjustment` paydo bo'lsa admin'ga xabar
-- [ ] **Test:** 50 trade'dan keyin `learned.json` o'zgarmasligini, lekin `pending_adjustments` ga yozilishini tekshirish. *(admin_cli unit test bor, lekin explicit 50-trade end-to-end yo'q)*
+- [x] **Test:** 50 trade'dan keyin `learned.json` o'zgarmasligini, lekin `pending_adjustments` ga yozilishini tekshirish. *(2026-05-23: `tests/unit/test_self_learner_50_trades.py` — 3 ta scenario: gate ON learned.json unchanged + DB pending + Telegram notify; AUTO_APPLY=true learned.json mutated + audit; admin_cli approve → learned.json yangilanadi)*
 
 ### F1-2: Config validation — silent fallback'ni o'chirish 🟠
 > **TMAS pattern:** `src/tmas/core/settings.py` (pydantic v2, ValidationError)
@@ -124,7 +124,7 @@ Quyidagi muammolar hal qilindi:
 ### Faza 1 Acceptance
 - [x] `pytest tests/` → 20/20 passed *(243/243 passed: 22 smoke + 132 TMAS port + ...)*
 - [x] `ruff check apps/` → 0 warning *(commit b95d01c: 0 errors)*
-- [x] Self-learner 50 trade'dan keyin `pending_adjustments` ga yozadi, `learned.json` o'zgarmaydi *(gate logikasi yozildi; explicit 50-trade simulatsiya test'i F1-1 da pending)*
+- [x] Self-learner 50 trade'dan keyin `pending_adjustments` ga yozadi, `learned.json` o'zgarmaydi *(2026-05-23: `test_self_learner_50_trades.py` 3/3 pass)*
 - [x] Invalid `.env` bilan bot ishga tushmaydi *(ValidationError test passed)*
 - [x] `/health` endpoint ishlaydi *(main.py:356-362 daemon thread)*
 
@@ -177,7 +177,8 @@ Quyidagi muammolar hal qilindi:
   - +30 yangi test (25 zone_finder, 5 list-routing, 3 filter); 281/281 pytest pass
 - [x] **Smoke C 1 oy (filterless):** 314 trade, WR=42%, PF=0.72, PnL=-$99 — multi-TF infra ishlayapti
 - [x] **Smoke C 1 oy (filtered M15_OTE+M15_DR_Eq):** 223 trade, WR=47.5%, PF=0.96, PnL=-$10.20 (breakeven yaqin)
-- [ ] **Acceptance:** 24 oy 2024-2025 acceptance run (~3 soat) — joriy filter bilan haqiqiy verdict
+- [x] **Engine hot-fix — progress logging** *(2026-05-23: F2 silent 5h run muammosini hal qildi — `engine/engine.py` ga `_estimate_total_bars()` + `_log_progress()` + `progress_every_bars` constructor param; `engine/__main__.py` ga `--progress-every-bars` CLI flag (default 1000); 1-haftalik synthetic'da `[progress] bars 300/672 (44.6%) | trades 64 | elapsed 163s | ETA 202s` ko'rinishi tasdiqlangan; 0 regression)*
+- [⏸] **Acceptance:** 24 oy 2024-2025 acceptance run — **kechiktirildi oxirgi fazaga** *(2026-05-23: 1-urinish 5+h da tugamadi, kill qilindi; 8-chunk split-strategy boshlangan, Q1 2024 tugadi: 795 trade, WR 46.79%, PF 0.88, REJECT, top loser H1_DR_Eq -$96; foydalanuvchi tasks-bitirib-oxirida-qaytarish strategiyasini tanladi. Q1 natija saqlanadi: `reports/acceptance_24m/q1_2024/`)*
 - [ ] (Optional) D1 + M30 ma'lumotini yuklash → to'liq paradigma (`scripts/download_mt5_history.py`)
 
 ### F2-4: Demo natijalarini hisobot qilish 🟡
@@ -216,7 +217,7 @@ Quyidagi muammolar hal qilindi:
 - [ ] **4-7 kun:** auto-mode, lekin har trade'da Telegram detail bilan xabar
 
 ### F3-3: Live monitoring 🔵
-- [ ] Telegram bot'ga `/status`, `/positions`, `/pause`, `/resume` commandlari qo'shish
+- [x] Telegram bot'ga `/status`, `/positions`, `/pause`, `/resume` commandlari qo'shish *(2026-05-23: `telegram_bot.py` ga inbound polling + command registry + auth; yangi `telegram_commands.py` 4 ta handler; `tests/unit/test_telegram_commands.py` 19 test pass; main.py wire-up F3 deployment fazasida)*
 - [ ] Watchdog ishga tushirilgan bo'lsin (`scripts/watchdog.ps1`)
 - [ ] Daily summary 23:00 UTC'da avtomatik Telegram'ga: PnL, trades, win rate, DD
 
@@ -238,20 +239,20 @@ Quyidagi muammolar hal qilindi:
 ### F4-2: Walk-forward (oylik) 🟢
 > **TMAS pattern:** `WalkForwardValidator` — bu yerda **bir marta oyiga** ishlatiladi
 
-- [ ] `analysis/walk_forward.py` (TMAS'dan ko'chirish)
-- [ ] Oyiga 1 marta: oxirgi 12 oyda walk-forward, overfit score chiqarish
-- [ ] Overfit > 0.6 bo'lsa — Telegram OGOHLANTIRISH
+- [x] `analysis/walk_forward.py` (TMAS spec'idan ko'chirish) *(2026-05-23: ~280 satr; `WalkForwardConfig/Window/Result`, `build_windows`, `calc_overfit_score`, `_verdict`, `WalkForwardValidator.run()` engine_factory pattern bilan; parameter optimization YO'Q — joriy parametrlar bilan train/test drift o'lchanadi; `tests/unit/test_walk_forward.py` 20 test pass)*
+- [ ] Oyiga 1 marta: oxirgi 12 oyda walk-forward, overfit score chiqarish *(F4 deployment fazasida — scheduler wire-up)*
+- [ ] Overfit > 0.6 bo'lsa — Telegram OGOHLANTIRISH *(F4 deployment fazasida)*
 
 ### F4-3: Reflector A/B test 🟢
 > **TMAS pattern:** `ReflectorBacktester` — self-learner haqiqatan foyda berayotganini tekshirish
 
-- [ ] `analysis/reflector_backtest.py` (TMAS'dan ko'chirish)
-- [ ] Oyiga 1 marta: SelfLearner ON vs OFF backtest
-- [ ] Agar `p > 0.05` yoki `t < 0` — Telegram'ga "SelfLearner foyda bermayapti, o'chirish kerak"
+- [x] `analysis/reflector_backtest.py` (TMAS spec'idan ko'chirish) *(2026-05-23: ~240 satr; `ReflectorABConfig` (thresholds), `ReflectorABResult`, `_verdict` heuristic (HARMFUL/BENEFICIAL/NEUTRAL/WARN), `ReflectorBacktester.run_comparison()` engine_factory `(start, end, treatment_on)` pattern bilan; paired t-test daily_returns talab qiladi — bizning BacktestResult'da hozircha yo'q, aggregate Sharpe/DD ratio'lar bilan ishlatildi; `tests/unit/test_reflector_backtest.py` 16 test pass)*
+- [ ] Oyiga 1 marta: SelfLearner ON vs OFF backtest *(F4 deployment fazasida — scheduler wire-up)*
+- [ ] Agar verdict HARMFUL — Telegram'ga "SelfLearner foyda bermayapti, o'chirish kerak" *(F4 deployment fazasida)*
 
 ### F4-4: Monte Carlo robustness 🟢
-- [ ] `analysis/monte_carlo.py` (TMAS'dan ko'chirish)
-- [ ] Worst-case drawdown ko'rsatkichi — risk per trade ni qayta sozlash uchun
+- [x] `analysis/monte_carlo.py` (TMAS spec'idan ko'chirish) *(2026-05-23: ~180 satr; `MonteCarloConfig` (n_sims/initial/ruin_threshold/seed), `MonteCarloResult` (p5/p50/p95 + worst_case + p_ruin + streak), helpers `equity_curve`/`max_drawdown_pct`/`longest_losing_streak`, `MonteCarloSimulator.run(pnls)` permutation-based bootstrap; `tests/unit/test_monte_carlo.py` 24 test pass)*
+- [ ] Worst-case drawdown ko'rsatkichi — risk per trade ni qayta sozlash uchun *(F4 deployment fazasida — RiskConfig wire-up)*
 
 ### F4-5: Strategiya yaxshilashlari 🟢
 - [ ] Yangi setup type'lar — `pending_adjustments` orqali approval bilan
