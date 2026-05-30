@@ -233,8 +233,10 @@ Quyidagi muammolar hal qilindi:
 > Bu ishlar live ishlashga **halaqit qilmaydi**, parallel davom etadi.
 
 ### F4-1: Haftalik hisobotlar 🟢
-- [ ] Har juma 23:00 UTC: weekly Telegram hisobot — TMAS `BacktestResult.to_dict()` formati
-- [ ] `reports/weekly_<date>.html` saqlash
+- [x] `analysis/weekly_report.py` (yangi, ~380 satr): `WeeklyReportConfig`, `WeeklyReportResult`, CSV → performance.compute schema mapping (entry→entry_price, exit→exit_price, label→setup_type), running-balance equity curve, session breakdown, `generate()` saves `reports/weekly_<date>.html` + compact HTML Telegram text (Wilson CI, PF, Sharpe, Max DD, best/worst session, best setup) *(2026-05-30; reuses `analysis/performance.compute` + `analysis/report_html.render`; performance.py:Sharpe nan-guard for small windows; CLI `python -m apps.api.src.agents.trader.analysis.weekly_report --balance X [--end YYYY-MM-DD] [--days 7]`)*
+- [x] CLI smoke against live `brain/trades.csv` (1 trade window) — HTML 4.7 KB written, Telegram text formatted, verdict propagates
+- [x] **Test:** `tests/unit/test_weekly_report.py` — 28 test (config validation, CSV load, normalization, window filter half-open, equity curve drawdown, session breakdown, Telegram zero-trade + populated, generate() integration writes HTML, CLI happy path + invalid date + print-telegram). **391/391 pytest pass (363 + 28 new), 0 regression.**
+- [ ] **Scheduler wire-up:** Har juma 23:00 UTC `generate()` + `telegram_bot.send(result.telegram_text, parse_mode='HTML')` — F4 deployment fazasida (live MT5 paytida)
 
 ### F4-2: Walk-forward (oylik) 🟢
 > **TMAS pattern:** `WalkForwardValidator` — bu yerda **bir marta oyiga** ishlatiladi

@@ -190,10 +190,13 @@ def sharpe_ratio(
     # Per-period returns
     rets = np.diff(equities) / equities[:-1]
     rets = rets[~np.isnan(rets)]
-    if len(rets) == 0 or rets.std(ddof=1) == 0:
+    if len(rets) < 2:
+        return 0.0
+    std = rets.std(ddof=1)
+    if std == 0 or np.isnan(std):
         return 0.0
     excess = rets - (risk_free_rate / periods_per_year)
-    return float((excess.mean() / rets.std(ddof=1)) * np.sqrt(periods_per_year))
+    return float((excess.mean() / std) * np.sqrt(periods_per_year))
 
 
 def avg_rr(trades: Iterable[Any]) -> float:
