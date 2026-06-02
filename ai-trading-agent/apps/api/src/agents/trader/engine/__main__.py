@@ -174,6 +174,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--block-setup",
+        action="append",
+        default=[],
+        metavar="LABEL",
+        help=(
+            "Block a setup label (e.g. H1_DR_Eq) in addition to the analyst's "
+            "DEFAULT_BLOCKED_SETUPS. Repeatable. Diagnostic use: isolate a "
+            "loser setup without code changes."
+        ),
+    )
+    p.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -337,7 +348,11 @@ def main(argv: list[str] | None = None) -> int:
     data = HistoricalDataManager(data_path=data_path)
     data.preload(args.symbol, timeframes=list(timeframes))
 
-    analyst = ICTAnalyst(clock=clock, data=data)
+    # F2-3.1 diagnostic: union CLI --block-setup labels with analyst defaults.
+    blocked = set(ICTAnalyst.DEFAULT_BLOCKED_SETUPS) | set(args.block_setup)
+    if args.block_setup:
+        logger.info("Blocked setups (defaults + CLI): {}", sorted(blocked))
+    analyst = ICTAnalyst(clock=clock, data=data, blocked_setups=blocked)
 
     # NB: BacktestEngine constructs its OWN clock + data manager internally
     # from `config`. We pass the analyst that already references our preloaded
