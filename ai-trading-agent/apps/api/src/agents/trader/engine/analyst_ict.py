@@ -26,6 +26,7 @@ from loguru import logger
 from apps.api.src.agents.trader.analysis.ict import ICTAnalysis
 from apps.api.src.agents.trader.core.data import HistoricalDataManager
 from apps.api.src.agents.trader.engine import zone_finder
+from apps.api.src.agents.trader.engine.regime import RegimeGate
 from apps.api.src.agents.trader.engine.signals import Signal
 
 
@@ -137,6 +138,7 @@ class ICTAnalyst:
         confluence_max_weight: float = 100.0,
         max_signals_per_cycle: int = 8,
         blocked_setups: set[str] | frozenset[str] | None = None,
+        regime: RegimeGate | None = None,
     ) -> None:
         self.clock = clock
         self.data = data
@@ -148,6 +150,9 @@ class ICTAnalyst:
             frozenset(blocked_setups) if blocked_setups is not None
             else self.DEFAULT_BLOCKED_SETUPS
         )
+        # v4: high-volatility regime gate. None / disabled gate = no-op, so the
+        # analyst reproduces v3 unless a gate is explicitly passed.
+        self.regime = regime
         self.ict = ICTAnalysis()
         self._emitted_zone_keys: set[tuple] = set()
 
@@ -210,6 +215,14 @@ class ICTAnalyst:
         # 5. Current price (last M15 close)
         current_price = float(candles_per_tf["M15"].iloc[-1]["close"])
 
+        # 5b. Regime gate — realised M15 volatility for this cycle. Computed once
+        #     (0.0 when the gate is absent/disabled) and reused per zone below.
+        regime_atr_pct = (
+            self.regime.atr_pct(candles_per_tf["M15"])
+            if self.regime is not None and self.regime.enabled
+            else 0.0
+        )
+
         # 6. Silver Bullet flag
         silver_bullet = _is_silver_bullet(now.hour)
 
@@ -239,6 +252,9 @@ class ICTAnalyst:
         for zone in zones:
             label = zone.get("label", "UNKNOWN")
             if label in self.blocked_setups:
+                continue
+            # v4 regime gate: skip core reversion setups in high-vol regime.
+            if self.regime is not None and self.regime.should_block(label, regime_atr_pct):
                 continue
             entry = float(zone["entry"])
             direction = zone["direction"]

@@ -37,6 +37,10 @@ from apps.api.src.agents.trader.core.broker import BrokerConfig
 from apps.api.src.agents.trader.core.clock import VirtualClock, set_clock
 from apps.api.src.agents.trader.core.data import HistoricalDataManager
 from apps.api.src.agents.trader.engine.analyst_ict import ICTAnalyst
+from apps.api.src.agents.trader.engine.regime import (
+    DEFAULT_REGIME_BLOCKED_SETUPS,
+    RegimeGate,
+)
 from apps.api.src.agents.trader.engine.config import BacktestConfig
 from apps.api.src.agents.trader.engine.config import RiskConfig as EngineRiskConfig
 from apps.api.src.agents.trader.engine.engine import BacktestEngine
@@ -182,6 +186,40 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Block a setup label (e.g. H1_DR_Eq) in addition to the analyst's "
             "DEFAULT_BLOCKED_SETUPS. Repeatable. Diagnostic use: isolate a "
             "loser setup without code changes."
+        ),
+    )
+    p.add_argument(
+        "--regime-atr-threshold",
+        type=float,
+        default=0.0,
+        metavar="PCT",
+        help=(
+            "F4 regime gate: block the core reversion setups (M15_OB/BB/CISD by "
+            "default) when M15 ATR%% (ATR/price*100) exceeds PCT. <=0 disables "
+            "(default), reproducing v3. Calibrated band 0.14-0.20; 0.18 blocks "
+            "~50%% of high-vol bars and <15%% of normal-vol bars."
+        ),
+    )
+    p.add_argument(
+        "--regime-atr-period",
+        type=int,
+        default=14,
+        metavar="N",
+        help=(
+            "Regime gate ATR lookback for the volatility measurement (default "
+            "14, same window as ICTAnalysis._atr). Affects the gate's high-vol "
+            "decision ONLY — zone sizing is unchanged."
+        ),
+    )
+    p.add_argument(
+        "--regime-block-setup",
+        action="append",
+        default=[],
+        metavar="LABEL",
+        help=(
+            "Setup label to block while the regime is high-vol (repeatable). "
+            "If omitted while --regime-atr-threshold>0, defaults to "
+            "M15_OB, M15_BB, M15_CISD."
         ),
     )
     p.add_argument(
@@ -352,7 +390,26 @@ def main(argv: list[str] | None = None) -> int:
     blocked = set(ICTAnalyst.DEFAULT_BLOCKED_SETUPS) | set(args.block_setup)
     if args.block_setup:
         logger.info("Blocked setups (defaults + CLI): {}", sorted(blocked))
-    analyst = ICTAnalyst(clock=clock, data=data, blocked_setups=blocked)
+
+    # F4 regime gate: block core reversion setups in high realised volatility.
+    # Disabled unless --regime-atr-threshold > 0 (so default run == v3).
+    regime = None
+    if args.regime_atr_threshold and args.regime_atr_threshold > 0:
+        regime_blocked = (
+            frozenset(args.regime_block_setup) if args.regime_block_setup
+            else DEFAULT_REGIME_BLOCKED_SETUPS
+        )
+        regime = RegimeGate(
+            atr_threshold=args.regime_atr_threshold,
+            atr_period=args.regime_atr_period,
+            blocked_setups=regime_blocked,
+        )
+        logger.info(
+            "Regime gate ON: block {} when M15 ATR% > {} (period {})",
+            sorted(regime.blocked_setups), regime.atr_threshold, regime.atr_period,
+        )
+
+    analyst = ICTAnalyst(clock=clock, data=data, blocked_setups=blocked, regime=regime)
 
     # NB: BacktestEngine constructs its OWN clock + data manager internally
     # from `config`. We pass the analyst that already references our preloaded
