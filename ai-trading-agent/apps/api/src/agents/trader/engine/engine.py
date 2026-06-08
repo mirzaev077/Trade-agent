@@ -111,6 +111,10 @@ class BacktestEngine:
         self._last_history_len: int = 0
         # Tracker: oldingi clock tick (session boundary detection)
         self._last_tick: datetime | None = None
+        # Perf: running max equity (peak) for O(1) drawdown. Was recomputed as
+        # max() over the whole (copied) equity curve every bar -> O(n) per bar
+        # -> O(n^2) per run. Kept in sync at both equity-record sites below.
+        self._equity_peak: float | None = None
         # F2 hot-fix: progress logging — uzun runlarda jim qolmaslik uchun.
         # 0 yoki manfiy qiymat → progress log o'chiriladi.
         self._progress_every_bars: int = (
@@ -247,6 +251,10 @@ class BacktestEngine:
         if self._is_new_session(self._last_tick, now):
             self.broker.apply_overnight_swap()
             self.journal.daily_snapshot(self.broker, now)
+            # daily_snapshot appended an equity point — keep the running peak in
+            # sync so _record_equity below stays equal to max(equity_curve).
+            eq = self.broker.equity
+            self._equity_peak = eq if self._equity_peak is None else max(self._equity_peak, eq)
         self._last_tick = now
 
         if not self._is_trading_allowed(now):
@@ -343,13 +351,17 @@ class BacktestEngine:
         self._last_history_len = len(history)
 
     def _record_equity(self, timestamp: datetime) -> None:
-        """Equity point yozish + drawdown hisoblash."""
-        curve = self.journal.get_equity_curve()
-        peak = max((p["equity"] for p in curve), default=self.broker.equity)
-        peak = max(peak, self.broker.equity)
-        dd_pct = (peak - self.broker.equity) / peak * 100.0 if peak > 0 else 0.0
+        """Equity point yozish + drawdown hisoblash.
+
+        Peak = running max of all equity recorded so far (== max over the equity
+        curve, maintained incrementally here and at the daily_snapshot site).
+        """
+        eq = self.broker.equity
+        peak = eq if self._equity_peak is None else max(self._equity_peak, eq)
+        self._equity_peak = peak
+        dd_pct = (peak - eq) / peak * 100.0 if peak > 0 else 0.0
         self.journal.record_equity_point(
-            timestamp, self.broker.equity, self.broker.balance, dd_pct,
+            timestamp, eq, self.broker.balance, dd_pct,
         )
 
     def _current_bar(self, symbol: str):

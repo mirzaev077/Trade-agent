@@ -113,12 +113,17 @@ class ICTAnalysis:
     def _market_structure(self, candles: pd.DataFrame) -> dict:
         swings = []
         n = len(candles)
+        # Perf: pull OHLC to numpy once — this swing scan is the single hottest
+        # loop in analyze(); per-row .iloc access was ~10-50x slower. Values are
+        # identical float64, so results are byte-for-byte unchanged.
+        highs_a = candles["high"].to_numpy(dtype=float)
+        lows_a = candles["low"].to_numpy(dtype=float)
         for i in range(3, n - 3):
-            h = float(candles.iloc[i]["high"])
-            l = float(candles.iloc[i]["low"])
-            if all(h >= float(candles.iloc[i+k]["high"]) for k in [-3,-2,-1,1,2,3] if 0 <= i+k < n):
+            h = float(highs_a[i])
+            l = float(lows_a[i])
+            if all(h >= highs_a[i+k] for k in [-3,-2,-1,1,2,3] if 0 <= i+k < n):
                 swings.append({"type": "high", "price": h, "idx": i})
-            if all(l <= float(candles.iloc[i+k]["low"]) for k in [-3,-2,-1,1,2,3] if 0 <= i+k < n):
+            if all(l <= lows_a[i+k] for k in [-3,-2,-1,1,2,3] if 0 <= i+k < n):
                 swings.append({"type": "low",  "price": l, "idx": i})
 
         trend     = self._ema_trend(candles)
@@ -353,11 +358,14 @@ class ICTAnalysis:
         fvgs = []
         atr  = self._atr(candles)
         n    = len(candles)
+        # Perf: numpy once instead of 4 per-row .iloc lookups per bar.
+        highs_a = candles["high"].to_numpy(dtype=float)
+        lows_a  = candles["low"].to_numpy(dtype=float)
         for i in range(1, n - 1):
-            ph = float(candles.iloc[i-1]["high"])
-            pl = float(candles.iloc[i-1]["low"])
-            nh = float(candles.iloc[i+1]["high"])
-            nl = float(candles.iloc[i+1]["low"])
+            ph = float(highs_a[i-1])
+            pl = float(lows_a[i-1])
+            nh = float(highs_a[i+1])
+            nl = float(lows_a[i+1])
             if ph < nl:
                 gap = nl - ph
                 if gap >= atr * 0.08:
@@ -545,14 +553,17 @@ class ICTAnalysis:
         thresh = atr * 0.12
         n      = len(candles)
 
+        # Perf: numpy once — same hot swing scan as _market_structure.
+        highs_a = candles["high"].to_numpy(dtype=float)
+        lows_a  = candles["low"].to_numpy(dtype=float)
         swing_highs = []
         swing_lows  = []
         for i in range(3, n - 3):
-            h = float(candles.iloc[i]["high"])
-            l = float(candles.iloc[i]["low"])
-            if all(h >= float(candles.iloc[i+k]["high"]) for k in [-3,-2,-1,1,2,3] if 0<=i+k<n):
+            h = float(highs_a[i])
+            l = float(lows_a[i])
+            if all(h >= highs_a[i+k] for k in [-3,-2,-1,1,2,3] if 0<=i+k<n):
                 swing_highs.append((i, h))
-            if all(l <= float(candles.iloc[i+k]["low"])  for k in [-3,-2,-1,1,2,3] if 0<=i+k<n):
+            if all(l <= lows_a[i+k]  for k in [-3,-2,-1,1,2,3] if 0<=i+k<n):
                 swing_lows.append((i, l))
 
         # Group equal highs

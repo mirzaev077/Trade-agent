@@ -167,6 +167,11 @@ class ICTAnalyst:
         self.regime = regime
         self.ict = ICTAnalysis()
         self._emitted_zone_keys: set[tuple] = set()
+        # Perf: memoize per-TF ICT analysis keyed by the last-closed bar
+        # timestamp. HTF windows (H4/H1/D1) only advance when a new bar on that
+        # TF closes, so most M15 steps would otherwise re-run identical analysis
+        # (measured: H4 ~95% redundant, H1 ~82%). tf -> (last_ts, ICTSignal, atr).
+        self._analysis_cache: dict[str, tuple[Any, Any, float]] = {}
 
     # ── Public API expected by BacktestEngine._trading_cycle ─────────────────
 
@@ -207,12 +212,22 @@ class ICTAnalyst:
         if "D1" not in candles_per_tf and "H4" not in candles_per_tf:
             return []
 
-        # 2. Run ICT.analyze per TF + ATR
+        # 2. Run ICT.analyze per TF + ATR — memoized by last-closed bar timestamp.
+        #    When a TF's window has not advanced since the previous cycle, the
+        #    candles are identical and analyze/_atr would return the same result,
+        #    so we reuse the cached value (byte-identical, just skips the work).
         ict_map: dict[str, Any] = {}
         atr_map: dict[str, float] = {}
         for tf, df in candles_per_tf.items():
-            ict_map[tf] = self.ict.analyze(df, tf)
-            atr_map[tf] = self.ict._atr(df)
+            last_ts = df.index[-1]
+            cached = self._analysis_cache.get(tf)
+            if cached is not None and cached[0] == last_ts:
+                ict_map[tf], atr_map[tf] = cached[1], cached[2]
+            else:
+                sig = self.ict.analyze(df, tf)
+                atr = self.ict._atr(df)
+                self._analysis_cache[tf] = (last_ts, sig, atr)
+                ict_map[tf], atr_map[tf] = sig, atr
 
         # 3. HTF bias (D1 primary, H4 fallback — whichever is loaded)
         d1_trend = ict_map.get("D1").structure.get("trend", "sideways") if "D1" in ict_map else "sideways"

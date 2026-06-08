@@ -233,6 +233,47 @@ class TestDedup:
         assert len(third) == 1   # different entry
 
 
+class TestAnalysisMemoization:
+    """Perf: per-TF ICT analysis is memoized by last-closed bar timestamp.
+    An unchanged window reuses the cached ICTSignal/ATR; the result is identical,
+    only the (expensive) analyze/_atr work is skipped."""
+
+    def _bull(self):
+        return {"D1": "bullish", "H4": "sideways", "H1": "sideways",
+                "M30": "sideways", "M15": "sideways"}
+
+    def test_unchanged_window_skips_recompute(self, monkeypatch) -> None:
+        analyst = _make_analyst(trends=self._bull())
+        _patch_zone_finder(monkeypatch, [_zone(label="H4_OB", entry=2350.0)])
+
+        analyst.analyze_market("XAUUSD", _ALL_TFS)
+        n1 = analyst.ict.analyze.call_count
+        assert n1 >= 1                 # analyzed on the first cycle
+        assert analyst._analysis_cache  # cache populated
+
+        analyst.analyze_market("XAUUSD", _ALL_TFS)
+        assert analyst.ict.analyze.call_count == n1  # 2nd cycle = all cache hits
+
+    def test_cache_miss_recomputes(self, monkeypatch) -> None:
+        analyst = _make_analyst(trends=self._bull())
+        _patch_zone_finder(monkeypatch, [_zone(label="H4_OB", entry=2350.0)])
+
+        analyst.analyze_market("XAUUSD", _ALL_TFS)
+        n1 = analyst.ict.analyze.call_count
+        analyst._analysis_cache.clear()  # simulate every TF window advancing
+        analyst.analyze_market("XAUUSD", _ALL_TFS)
+        assert analyst.ict.analyze.call_count == 2 * n1  # recomputed each TF
+
+    def test_memoized_result_matches_uncached(self, monkeypatch) -> None:
+        _patch_zone_finder(monkeypatch, [_zone(label="H4_OB", entry=2350.0)])
+        analyst = _make_analyst(trends=self._bull())
+        cold = analyst.analyze_market("XAUUSD", _ALL_TFS)
+        analyst._emitted_zone_keys.clear()  # let dedup re-emit on the warm pass
+        warm = analyst.analyze_market("XAUUSD", _ALL_TFS)
+        assert [s.setup_type for s in cold] == [s.setup_type for s in warm] == ["H4_OB"]
+        assert [s.entry_price for s in warm] == [2350.0]
+
+
 class TestSetupBlocking:
     """F2-3.1 Variant C: setups in `blocked_setups` are dropped before emit."""
 
