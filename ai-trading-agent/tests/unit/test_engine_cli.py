@@ -94,3 +94,47 @@ def test_regime_disabled_when_threshold_zero() -> None:
     """threshold defaults to 0 → main() leaves regime=None (gate off)."""
     ns = _parse_args(_BASE)
     assert not (ns.regime_atr_threshold and ns.regime_atr_threshold > 0)
+
+
+# ── --dump-trades (per-trade diagnostics) ─────────────────────────────────────
+
+
+def test_dump_trades_defaults_to_none() -> None:
+    assert _parse_args(_BASE).dump_trades is None
+
+
+def test_dump_trades_parses_path() -> None:
+    ns = _parse_args(_BASE + ["--dump-trades", "out/trades.csv"])
+    assert ns.dump_trades == "out/trades.csv"
+
+
+def test_dump_trades_writes_scalar_csv(tmp_path) -> None:
+    """Scalar fields + ISO datetimes are written; nested blobs are dropped."""
+    from datetime import datetime, timezone
+
+    from apps.api.src.agents.trader.engine.__main__ import _dump_trades
+
+    rows = [{
+        "ticket": 1,
+        "entry_time": datetime(2025, 4, 1, 8, 0, tzinfo=timezone.utc),
+        "exit_time": datetime(2025, 4, 1, 10, 0, tzinfo=timezone.utc),
+        "setup_type": "M15_OB", "direction": "buy", "entry_price": 3200.0,
+        "sl": 3195.0, "tp": 3210.0, "lot": 0.1, "pnl": 12.5,
+        "session": "london", "day_of_week": "tue", "close_reason": "tp",
+        "signal": {"nested": "ignored"},  # nested blob must not leak
+    }]
+    p = tmp_path / "trades.csv"
+    assert _dump_trades(rows, str(p)) == 1
+    txt = p.read_text(encoding="utf-8")
+    assert txt.splitlines()[0].startswith("ticket,")     # header
+    assert "M15_OB" in txt
+    assert "2025-04-01T08:00:00+00:00" in txt            # datetime → ISO
+    assert "nested" not in txt                           # blob dropped
+
+
+def test_dump_trades_empty_writes_header_only(tmp_path) -> None:
+    from apps.api.src.agents.trader.engine.__main__ import _dump_trades
+
+    p = tmp_path / "empty.csv"
+    assert _dump_trades([], str(p)) == 0
+    assert len(p.read_text(encoding="utf-8").splitlines()) == 1  # header only

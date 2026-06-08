@@ -223,12 +223,57 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--dump-trades",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Write every closed trade (entry_time, setup_type, direction, "
+            "entry_price, pnl, session, ...) to PATH as CSV. Enables per-trade "
+            "post-hoc analysis (e.g. high-vol vs normal-vol PnL by setup) that "
+            "the aggregate setup_breakdown cannot answer."
+        ),
+    )
+    p.add_argument(
         "-v",
         "--verbose",
         action="store_true",
         help="Enable DEBUG logging.",
     )
     return p.parse_args(argv)
+
+
+# Scalar, analysis-relevant fields of a journal closed-trade row (drops the
+# nested signal/risk_check/reflection blobs that are not CSV-friendly).
+_TRADE_DUMP_FIELDS = (
+    "ticket", "entry_time", "exit_time", "setup_type", "direction",
+    "entry_price", "sl", "tp", "lot", "pnl", "session", "day_of_week",
+    "close_reason",
+)
+
+
+def _dump_trades(closed_trades: list[dict], path: str) -> int:
+    """Write closed-trade rows to ``path`` as CSV. Datetimes → ISO 8601.
+
+    Returns the number of rows written. Returns 0 (and writes only a header)
+    for an empty trade list. Used by ``--dump-trades`` for per-trade diagnostics.
+    """
+    import csv
+
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    n = 0
+    with out.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=list(_TRADE_DUMP_FIELDS), extrasaction="ignore")
+        w.writeheader()
+        for t in closed_trades:
+            row = {k: t.get(k) for k in _TRADE_DUMP_FIELDS}
+            for tk in ("entry_time", "exit_time"):
+                v = row.get(tk)
+                if hasattr(v, "isoformat"):
+                    row[tk] = v.isoformat()
+            w.writerow(row)
+            n += 1
+    return n
 
 
 def _parse_date_utc(s: str) -> datetime:
@@ -438,6 +483,12 @@ def main(argv: list[str] | None = None) -> int:
     else:
         closed_trades = list(engine.broker.history)
     equity_curve = engine.journal.get_equity_curve() if hasattr(engine.journal, "get_equity_curve") else []
+
+    if args.dump_trades:
+        n = _dump_trades(closed_trades, args.dump_trades)
+        logger.info("Dumped {} closed trades -> {}", n, args.dump_trades)
+        print(f"  trades_csv    : {args.dump_trades} ({n} rows)")
+
     perf_report = perf.compute(
         closed_trades=closed_trades,
         equity_curve=equity_curve,
