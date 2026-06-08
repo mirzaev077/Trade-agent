@@ -117,15 +117,27 @@ class ICTAnalyst:
         "M15": 500,
     }
 
+    # Setup-type structural losers — blocked by name in every regime. Reserved
+    # for setups whose edge is broken by construction; directional / regime-
+    # dependent under-performance is NOT blocked here (kept CLI-only via
+    # --block-setup or handled by RegimeGate, to avoid overfitting to one
+    # period). The live trader also down-weights losers via SelfLearner; the
+    # backtest lacks that loop, so we block them by name.
+    #
     # F2-3.1 Variant C smoke (2024-01, 1 month):
     # - M15_OTE: 69 trades, PF 0.39 — dynamic fib on M15 = noise
     # - M15_DR_Eq: 22 trades, PF 0.04 — DR equilibrium needs HTF context
-    # Live trader filters these via SelfLearner setup weights; backtest lacks
-    # that loop, so we block them by name. Direction-asymmetric performance
-    # (BEAR setups underperforming) is NOT blocked — could be 1-month bias.
+    #
+    # Per-trade diagnosis over 24 months / 8 quarters (2026-06, --dump-trades):
+    # - H1_OB: net -$106.55, WR < 50% in 6 of 8 quarters, no quarter profitable
+    #   beyond noise (+$9/+$21/+$23 best). The loss is CHRONIC, not volatility-
+    #   driven (the v4 RegimeGate does not catch it), so it belongs here rather
+    #   than the gate. Blocking it lifts the v4 24-month aggregate +$351 -> ~+$457
+    #   and turns no quarter negative (it only trims 3 marginally-positive ones).
     DEFAULT_BLOCKED_SETUPS: frozenset[str] = frozenset({
         "M15_OTE",
         "M15_DR_Eq",
+        "H1_OB",
     })
 
     def __init__(

@@ -92,7 +92,7 @@ def _patch_zone_finder(monkeypatch, zones: list[dict]) -> MagicMock:
 def _zone(
     *, direction: str = "buy", entry: float = 2350.0, sl: float = 2345.0,
     tp1: float = 2360.0, tp2: float = 2365.0, tp3: float = 2370.0,
-    label: str = "H1_OB", tf: str = "H1", weight: float = 30.0,
+    label: str = "H4_OB", tf: str = "H4", weight: float = 30.0,
 ) -> dict:
     return {
         "direction": direction, "entry": entry, "sl": sl,
@@ -219,13 +219,13 @@ class TestDedup:
         analyst = _make_analyst(trends={"D1": "bullish", "H4": "sideways",
                                         "H1": "sideways", "M30": "sideways", "M15": "sideways"})
 
-        _patch_zone_finder(monkeypatch, [_zone(label="H1_OB", entry=2350.0)])
+        _patch_zone_finder(monkeypatch, [_zone(label="H4_OB", entry=2350.0)])
         first = analyst.analyze_market("XAUUSD", _ALL_TFS)
 
         _patch_zone_finder(monkeypatch, [_zone(label="H1_FVG", entry=2350.0)])
         second = analyst.analyze_market("XAUUSD", _ALL_TFS)
 
-        _patch_zone_finder(monkeypatch, [_zone(label="H1_OB", entry=2348.0)])
+        _patch_zone_finder(monkeypatch, [_zone(label="H4_OB", entry=2348.0)])
         third = analyst.analyze_market("XAUUSD", _ALL_TFS)
 
         assert len(first) == 1
@@ -236,18 +236,23 @@ class TestDedup:
 class TestSetupBlocking:
     """F2-3.1 Variant C: setups in `blocked_setups` are dropped before emit."""
 
-    def test_default_blocks_m15_ote_and_dr_eq(self, monkeypatch) -> None:
+    def test_h1_ob_in_default_blocklist(self) -> None:
+        # 24-month per-trade diagnosis: H1_OB is a chronic, non-vol-driven loser.
+        assert "H1_OB" in ICTAnalyst.DEFAULT_BLOCKED_SETUPS
+
+    def test_default_blocks_ote_dr_eq_and_h1_ob(self, monkeypatch) -> None:
         zones = [
             _zone(label="M15_OTE", entry=2350.0),     # blocked by default
             _zone(label="M15_DR_Eq", entry=2351.0),   # blocked by default
-            _zone(label="H1_OB", entry=2352.0),       # allowed
+            _zone(label="H1_OB", entry=2352.0),       # blocked by default (chronic loser)
+            _zone(label="H4_OB", entry=2353.0),       # allowed
         ]
         _patch_zone_finder(monkeypatch, zones)
         analyst = _make_analyst(trends={"D1": "bullish", "H4": "sideways",
                                         "H1": "sideways", "M30": "sideways", "M15": "sideways"})
         sigs = analyst.analyze_market("XAUUSD", _ALL_TFS)
         assert len(sigs) == 1
-        assert sigs[0].setup_type == "H1_OB"
+        assert sigs[0].setup_type == "H4_OB"
 
     def test_custom_blocked_setups_override(self, monkeypatch) -> None:
         zones = [
@@ -313,7 +318,7 @@ class TestSignalContract:
 
     def test_signal_metadata_carries_zone_details(self, monkeypatch) -> None:
         sig = self._emit_one(monkeypatch)
-        assert sig.metadata["tf"] == "H1"
+        assert sig.metadata["tf"] == "H4"
         assert sig.metadata["weight"] == 30.0
         assert "tp1" in sig.metadata and "tp2" in sig.metadata and "tp3" in sig.metadata
 
