@@ -45,6 +45,11 @@ from apps.api.src.agents.trader.engine.config import BacktestConfig
 from apps.api.src.agents.trader.engine.config import RiskConfig as EngineRiskConfig
 from apps.api.src.agents.trader.engine.engine import BacktestEngine
 from apps.api.src.agents.trader.engine.result import BacktestResult
+from apps.api.src.agents.trader.engine.runner import (
+    BacktestParams,
+    run_backtest,
+    _timeframes_for,
+)
 
 
 # ── Synthetic data generator (used by --synthetic) ───────────────────────────
@@ -296,23 +301,27 @@ def _parse_date_utc(s: str) -> datetime:
     return dt
 
 
-def _print_config_summary(config: BacktestConfig, data_path: Path) -> None:
+def _print_config_summary(
+    params: BacktestParams, start: datetime, end: datetime, data_path: Path
+) -> None:
     print("=" * 70)
     print("OpenClaw Backtest")
     print("=" * 70)
-    print(f"  run_id            : {config.run_id}")
-    print(f"  symbol            : {config.symbol}")
-    print(f"  start             : {config.start.isoformat()}")
-    print(f"  end               : {config.end.isoformat()}")
-    duration_days = (config.end - config.start).total_seconds() / 86400.0
+    print(f"  symbol            : {params.symbol}")
+    print(f"  start             : {start.isoformat()}")
+    print(f"  end               : {end.isoformat()}")
+    duration_days = (end - start).total_seconds() / 86400.0
     print(f"  duration_days     : {duration_days:.2f}")
-    print(f"  primary_timeframe : {config.primary_timeframe}")
-    print(f"  timeframes        : {list(config.timeframes)}")
+    print(f"  primary_timeframe : {params.primary_timeframe}")
+    print(f"  timeframes        : {list(_timeframes_for(params.primary_timeframe))}")
     print(f"  data_path         : {data_path}")
-    print(f"  initial_balance   : {config.broker.initial_balance:.2f} USD")
-    print(f"  risk_per_trade    : {config.risk_config.risk_per_trade_pct:.2f}%")
-    print(f"  contract_size     : {config.broker.contract_size}")
-    print(f"  commission_per_lot: {config.broker.commission_per_lot:.2f}")
+    print(f"  initial_balance   : {params.initial_balance:.2f} USD")
+    print(f"  risk_per_trade    : {params.risk_per_trade:.2f}%")
+    if params.regime_atr_threshold > 0:
+        print(f"  regime_gate       : ATR% > {params.regime_atr_threshold} "
+              f"(period {params.regime_atr_period})")
+    if params.min_rr > 0:
+        print(f"  min_rr_floor      : {params.min_rr}")
     print("=" * 70)
 
 
@@ -401,118 +410,47 @@ def main(argv: list[str] | None = None) -> int:
             logger.error("data path does not exist: {}", data_path)
             return 2
 
-    broker_cfg = BrokerConfig(
-        initial_balance=args.initial_balance,
-        commission_per_lot=3.0,
-        slippage_model="fixed",
-        swap_rates={},
-        fixed_slippage_pips=1.0,
-        leverage=100,
-        contract_size=100,  # XAUUSD default
-    )
-    risk_cfg = EngineRiskConfig(risk_per_trade_pct=args.risk_per_trade)
-
-    primary = args.primary_timeframe
-    if primary == "M15":
-        timeframes: tuple[str, ...] = ("M15", "H1", "H4")
-    elif primary == "H1":
-        timeframes = ("H1", "H4")
-    elif primary == "H4":
-        timeframes = ("H4",)
-    else:
-        timeframes = (primary,)
-
-    config = BacktestConfig(
-        start=start,
-        end=end,
+    params = BacktestParams(
         symbol=args.symbol,
         data_path=data_path,
-        broker=broker_cfg,
-        risk_config=risk_cfg,
-        primary_timeframe=primary,
-        timeframes=timeframes,
-    )
-
-    _print_config_summary(config, data_path)
-
-    # Wire global clock (production code paths consult get_clock()).
-    clock = VirtualClock(start=start, end=end)
-    set_clock(clock)
-
-    # Preload candles into the data manager that the engine will share.
-    data = HistoricalDataManager(data_path=data_path)
-    data.preload(args.symbol, timeframes=list(timeframes))
-
-    # F2-3.1 diagnostic: union CLI --block-setup labels with analyst defaults.
-    blocked = set(ICTAnalyst.DEFAULT_BLOCKED_SETUPS) | set(args.block_setup)
-    if args.block_setup:
-        logger.info("Blocked setups (defaults + CLI): {}", sorted(blocked))
-
-    # F4 regime gate: block core reversion setups in high realised volatility.
-    # Disabled unless --regime-atr-threshold > 0 (so default run == v3).
-    regime = None
-    if args.regime_atr_threshold and args.regime_atr_threshold > 0:
-        regime_blocked = (
-            frozenset(args.regime_block_setup) if args.regime_block_setup
-            else DEFAULT_REGIME_BLOCKED_SETUPS
-        )
-        regime = RegimeGate(
-            atr_threshold=args.regime_atr_threshold,
-            atr_period=args.regime_atr_period,
-            blocked_setups=regime_blocked,
-        )
-        logger.info(
-            "Regime gate ON: block {} when M15 ATR% > {} (period {})",
-            sorted(regime.blocked_setups), regime.atr_threshold, regime.atr_period,
-        )
-
-    if args.min_rr and args.min_rr > 0:
-        logger.info("Min-RR floor ON: drop zones with planned RR < {}", args.min_rr)
-
-    analyst = ICTAnalyst(
-        clock=clock, data=data, blocked_setups=blocked, regime=regime,
+        primary_timeframe=args.primary_timeframe,
+        initial_balance=args.initial_balance,
+        risk_per_trade=args.risk_per_trade,
+        block_setup=tuple(args.block_setup),
+        regime_atr_threshold=args.regime_atr_threshold,
+        regime_atr_period=args.regime_atr_period,
+        regime_block_setup=tuple(args.regime_block_setup),
         min_rr=args.min_rr,
     )
 
-    # NB: BacktestEngine constructs its OWN clock + data manager internally
-    # from `config`. We pass the analyst that already references our preloaded
-    # data; the analyst.data and engine.data are independent instances pointed
-    # at the same data_path, which is fine for read-only access.
-    engine = BacktestEngine(
-        config,
-        analyst=analyst,
-        progress_every_bars=args.progress_every_bars,
+    _print_config_summary(params, start, end, data_path)
+    if args.block_setup:
+        logger.info(
+            "Blocked setups (defaults + CLI): {}",
+            sorted(set(ICTAnalyst.DEFAULT_BLOCKED_SETUPS) | set(args.block_setup)),
+        )
+    if args.regime_atr_threshold and args.regime_atr_threshold > 0:
+        logger.info(
+            "Regime gate ON: block core reversion setups when M15 ATR% > {} (period {})",
+            args.regime_atr_threshold, args.regime_atr_period,
+        )
+    if args.min_rr and args.min_rr > 0:
+        logger.info("Min-RR floor ON: drop zones with planned RR < {}", args.min_rr)
+
+    logger.info("Starting backtest run ({} -> {})", start.date(), end.date())
+    arts = run_backtest(
+        start, end, params, progress_every_bars=args.progress_every_bars,
     )
-    # Make the analyst use the engine's clock + data so the analyst reads
-    # the same simulated time as the engine's loop.
-    analyst.clock = engine.clock
-    analyst.data = engine.data
-
-    logger.info("Starting backtest run {}", config.run_id)
-    result = engine.run()
-
-    broker_summary = engine.broker.get_summary()
-
-    # F2-3.1: Use journal trade rows (have setup_type/sl/session) rather than
-    # broker.history (ClosedTrade dataclass — no setup_type/sl). Without this,
-    # setup_breakdown collapses to "UNKNOWN" and avg_rr is always 0.0.
-    if hasattr(engine.journal, "get_closed_trades"):
-        closed_trades = engine.journal.get_closed_trades()
-    else:
-        closed_trades = list(engine.broker.history)
-    equity_curve = engine.journal.get_equity_curve() if hasattr(engine.journal, "get_equity_curve") else []
+    result = arts.result
+    perf_report = arts.perf_report
+    closed_trades = arts.closed_trades
+    equity_curve = arts.equity_curve
+    broker_summary = arts.broker_summary
 
     if args.dump_trades:
         n = _dump_trades(closed_trades, args.dump_trades)
         logger.info("Dumped {} closed trades -> {}", n, args.dump_trades)
         print(f"  trades_csv    : {args.dump_trades} ({n} rows)")
-
-    perf_report = perf.compute(
-        closed_trades=closed_trades,
-        equity_curve=equity_curve,
-        starting_balance=float(config.broker.initial_balance),
-        run_id=config.run_id,
-    )
 
     _print_summary(result, broker_summary, perf_report)
 
@@ -522,23 +460,19 @@ def main(argv: list[str] | None = None) -> int:
     # F2-3: HTML report (optional)
     if args.html_report:
         cfg_summary = {
-            "symbol":            config.symbol,
-            "start":             config.start.isoformat(),
-            "end":               config.end.isoformat(),
-            "primary_timeframe": config.primary_timeframe,
-            "initial_balance":   f"${config.broker.initial_balance:.2f}",
-            "risk_per_trade":    f"{config.risk_config.risk_per_trade_pct:.2f}%",
+            "symbol":            args.symbol,
+            "start":             start.isoformat(),
+            "end":               end.isoformat(),
+            "primary_timeframe": args.primary_timeframe,
+            "initial_balance":   f"${args.initial_balance:.2f}",
+            "risk_per_trade":    f"{args.risk_per_trade:.2f}%",
         }
         html_str = report_html.render(perf_report, equity_curve, closed_trades, cfg_summary)
-        html_path = Path(args.report_path) / f"{config.run_id}.html"
+        html_path = Path(args.report_path) / f"{result.run_id}.html"
         report_html.save(html_str, html_path)
         print(f"  report_html   : {html_path}")
 
     print("-" * 70)
-
-    # Restore production clock so subsequent imports don't see the virtual one.
-    set_clock(None)
-
     return 0
 
 
