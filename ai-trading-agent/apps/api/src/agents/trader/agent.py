@@ -16,8 +16,12 @@ from .utils.session_times import (
 from .utils.news_filter import has_high_impact_news, get_next_news_str
 from .utils import telegram_bot as tg
 from .utils.trade_analytics import (
-    log_trade_csv, get_profit_factor, get_session_stats, build_weekly_report,
+    log_trade_csv, get_profit_factor, get_session_stats,
 )
+# F4 scheduler: end-of-day / end-of-week Telegram reports (read the same
+# brain/trades.csv that log_trade_csv writes). Pure content generators.
+from .analysis import daily_summary as _daily_summary
+from .analysis import weekly_report as _weekly_report
 from .specialist import (
     HTFBiasAgent,
     LiquidityHunterAgent,
@@ -34,6 +38,32 @@ from .state.persistence import (
 )
 # F0-2/F0-3: MT5 disconnect/recovery Telegram alerts (sync versions)
 from .utils.telegram_bot import notify_disconnect, notify_recovered
+
+
+# ── F4 scheduler: pure "is a report due?" predicates ──────────────────────────
+# Kept module-level and side-effect-free so the scheduling logic is unit-testable
+# without constructing a live agent. `now` is UTC. Both fire from 23:00 onward
+# (first qualifying tick of the day/week); the agent's last-fired marker prevents
+# repeats. Reports run BEFORE the weekend guard, so Friday (weekday 4) qualifies.
+
+def _daily_report_due(now, last_day_iso: str) -> bool:
+    """Once per UTC calendar day, Mon–Fri, from 23:00. Sat/Sun skipped (no
+    trades → noise). `last_day_iso` is the YYYY-MM-DD of the last daily sent."""
+    return (
+        now.weekday() <= 4
+        and now.hour >= 23
+        and now.date().isoformat() != last_day_iso
+    )
+
+
+def _weekly_report_due(now, last_week: int) -> bool:
+    """Once per ISO week, on Friday (weekday 4) from 23:00. `last_week` is the
+    ISO week number of the last weekly sent."""
+    return (
+        now.weekday() == 4
+        and now.hour >= 23
+        and now.isocalendar()[1] != last_week
+    )
 
 
 class TraderAgent:
@@ -147,8 +177,12 @@ class TraderAgent:
         # Profit factor monitoring
         self._pf_warn_sent: bool = False
 
-        # Haftalik hisobot (Yakshanba)
-        self._last_weekly_report_week: int = -1
+        # F4 scheduler: end-of-day / end-of-week report fire markers.
+        # Daily = once per calendar day (UTC) from 23:00; weekly = once per ISO
+        # week on Friday from 23:00. Fired BEFORE the weekend guard so the
+        # Friday wrap-up is not suppressed (the old Sunday weekly was dead code).
+        self._last_daily_summary_day: str = ""    # YYYY-MM-DD of last daily sent
+        self._last_weekly_report_week: int = -1   # ISO week of last weekly sent
 
         # BE re-entry tracking
         self._be_reentry_candidates: dict = {}  # ticket → meta
@@ -245,6 +279,55 @@ class TraderAgent:
         except Exception as e:  # noqa: BLE001 — health update hech qachon tick'ni buzmaydi
             logger.debug(f"[healthcheck] update error: {e}")
 
+    # ── F4 scheduler: daily / weekly reports ──────────────────────
+
+    async def _maybe_send_scheduled_reports(self) -> None:
+        """Fire the daily / weekly Telegram reports when due.
+
+        Reads the same ``brain/trades.csv`` that ``log_trade_csv`` writes (via
+        the report modules' default path) and is fully guarded — a report
+        failure can never interrupt trading. Called BEFORE the weekend guard so
+        the Friday-night wrap-up fires even though the market is closed.
+        """
+        now = get_clock().now()
+        bal = self._starting_balance or 0.0
+        if bal <= 0:
+            return  # report configs require starting_balance > 0
+
+        if _daily_report_due(now, self._last_daily_summary_day):
+            self._last_daily_summary_day = now.date().isoformat()
+            try:
+                res = _daily_summary.generate(
+                    _daily_summary.DailySummaryConfig(
+                        starting_balance=bal,
+                        summary_date=now.date(),
+                    )
+                )
+                await tg.send(res.telegram_text)
+                logger.info("📊 Kunlik hisobot yuborildi")
+            except Exception as _de:  # noqa: BLE001 — report never breaks trading
+                logger.debug(f"Daily summary error: {_de}")
+
+        if _weekly_report_due(now, self._last_weekly_report_week):
+            self._last_weekly_report_week = now.isocalendar()[1]
+            try:
+                from pathlib import Path
+                out_dir = (
+                    Path(_weekly_report._DEFAULT_CSV).parent.parent
+                    / "reports" / "weekly"
+                )
+                res = _weekly_report.generate(
+                    _weekly_report.WeeklyReportConfig(
+                        starting_balance=bal,
+                        window_end=now,
+                        output_dir=out_dir,
+                    )
+                )
+                await tg.send(res.telegram_text)
+                logger.info("📊 Haftalik hisobot yuborildi")
+            except Exception as _we:  # noqa: BLE001 — report never breaks trading
+                logger.debug(f"Weekly report error: {_we}")
+
     # ── Tick ──────────────────────────────────────────────────────
 
     async def _tick(self):
@@ -274,6 +357,11 @@ class TraderAgent:
         elif recovered_min == 0 and self._recovery_notified:
             # MT5 ulangan va recovery alert allaqachon yuborilgan — flag reset
             self._recovery_notified = False
+
+        # ── F4 scheduler: daily / weekly Telegram reports ─────────
+        # BEFORE the weekend guard on purpose: the Friday-night wrap-up must
+        # fire even though the market is closed (a read-only CSV summary).
+        await self._maybe_send_scheduled_reports()
 
         # ── Weekend guard ─────────────────────────────────────────
         now_utc = get_clock().now()
@@ -346,20 +434,9 @@ class TraderAgent:
         _today_wd = get_clock().now().weekday()
         _reduced_day = _today_wd in self.REDUCED_DAYS
 
-        # ── Haftalik hisobot (Yakshanba) ──────────────────────────
-        _cur_week = get_clock().now().isocalendar()[1]
-        if (get_clock().now().weekday() == 6 and
-                _cur_week != self._last_weekly_report_week):
-            self._last_weekly_report_week = _cur_week
-            try:
-                report = build_weekly_report(
-                    self.learner.data.get("trades", []),
-                    account.get("balance", 0),
-                )
-                await tg.send(report)
-                logger.info("📊 Haftalik hisobot yuborildi")
-            except Exception as _we:
-                logger.debug(f"Weekly report error: {_we}")
+        # (Weekly/daily reports now fire via _maybe_send_scheduled_reports()
+        #  before the weekend guard — the old Sunday block here was dead code,
+        #  unreachable because the guard returns on weekends.)
 
         # ── Candles: W1 → M1 ─────────────────────────────────────
         w1  = self._candles("W1",   60)
