@@ -233,6 +233,63 @@ class TestDedup:
         assert len(third) == 1   # different entry
 
 
+class TestMinRRFloor:
+    """Structural reward:risk floor. Zones with planned RR (|tp1-entry|/|entry-sl|)
+    below ``min_rr`` are dropped before routing. Default 0.0 disables the floor."""
+
+    _BULL = {"D1": "bullish", "H4": "sideways", "H1": "sideways",
+             "M30": "sideways", "M15": "sideways"}
+
+    def test_defaults_off(self) -> None:
+        assert _make_analyst().min_rr == 0.0
+
+    def test_floor_zero_keeps_low_rr_zone(self, monkeypatch) -> None:
+        # entry 2350, sl 2345 (risk 5), tp1 2352.5 (reward 2.5) -> RR 0.5
+        _patch_zone_finder(monkeypatch, [_zone(sl=2345.0, tp1=2352.5)])
+        analyst = _make_analyst(trends=self._BULL)
+        assert len(analyst.analyze_market("XAUUSD", _ALL_TFS)) == 1
+
+    def test_low_rr_zone_dropped(self, monkeypatch) -> None:
+        _patch_zone_finder(monkeypatch, [_zone(sl=2345.0, tp1=2352.5)])  # RR 0.5
+        analyst = _make_analyst(trends=self._BULL)
+        analyst.min_rr = 1.5
+        assert analyst.analyze_market("XAUUSD", _ALL_TFS) == []
+
+    def test_high_rr_zone_kept(self, monkeypatch) -> None:
+        _patch_zone_finder(monkeypatch, [_zone(sl=2345.0, tp1=2360.0)])  # RR 2.0
+        analyst = _make_analyst(trends=self._BULL)
+        analyst.min_rr = 1.5
+        assert len(analyst.analyze_market("XAUUSD", _ALL_TFS)) == 1
+
+    def test_boundary_rr_equal_floor_passes(self, monkeypatch) -> None:
+        # RR exactly == floor passes (>= semantics): tp1 2357.5 -> reward 7.5 / risk 5 = 1.5
+        _patch_zone_finder(monkeypatch, [_zone(sl=2345.0, tp1=2357.5)])
+        analyst = _make_analyst(trends=self._BULL)
+        analyst.min_rr = 1.5
+        assert len(analyst.analyze_market("XAUUSD", _ALL_TFS)) == 1
+
+    def test_culled_zone_does_not_reserve_dedup_key(self, monkeypatch) -> None:
+        """A zone dropped by the RR floor must not reserve its dedup key — if the
+        floor is later relaxed, the same zone is still emittable."""
+        _patch_zone_finder(monkeypatch, [_zone(sl=2345.0, tp1=2352.5)])  # RR 0.5
+        analyst = _make_analyst(trends=self._BULL)
+        analyst.min_rr = 1.5
+        assert analyst.analyze_market("XAUUSD", _ALL_TFS) == []  # culled
+        analyst.min_rr = 0.0  # relax
+        assert len(analyst.analyze_market("XAUUSD", _ALL_TFS)) == 1  # now emits
+
+    def test_mixed_zones_filtered_independently(self, monkeypatch) -> None:
+        zones = [
+            _zone(label="H4_OB", sl=2345.0, tp1=2360.0),    # RR 2.0 -> keep
+            _zone(label="H1_FVG", sl=2345.0, tp1=2352.5),   # RR 0.5 -> drop
+        ]
+        _patch_zone_finder(monkeypatch, zones)
+        analyst = _make_analyst(trends=self._BULL)
+        analyst.min_rr = 1.5
+        sigs = analyst.analyze_market("XAUUSD", _ALL_TFS)
+        assert [s.setup_type for s in sigs] == ["H4_OB"]
+
+
 class TestAnalysisMemoization:
     """Perf: per-TF ICT analysis is memoized by last-closed bar timestamp.
     An unchanged window reuses the cached ICTSignal/ATR; the result is identical,

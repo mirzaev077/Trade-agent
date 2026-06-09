@@ -151,6 +151,7 @@ class ICTAnalyst:
         max_signals_per_cycle: int = 8,
         blocked_setups: set[str] | frozenset[str] | None = None,
         regime: RegimeGate | None = None,
+        min_rr: float = 0.0,
     ) -> None:
         self.clock = clock
         self.data = data
@@ -158,6 +159,14 @@ class ICTAnalyst:
         self.min_candles_per_tf = min_candles_per_tf
         self.confluence_max_weight = confluence_max_weight
         self.max_signals_per_cycle = max_signals_per_cycle
+        # Structural reward:risk floor. A zone whose |tp1-entry|/|entry-sl| falls
+        # below this is dropped before routing. 0.0 (default) disables the floor,
+        # reproducing prior behaviour exactly. Motivation: the book's edge in
+        # benign regimes is high-WR / low-RR mean-reversion zones (e.g. planned
+        # RR ~0.6) that need ~60% WR to break even; when WR mean-reverts ~15pts
+        # in adverse regimes they bleed. A floor culls exactly those fragile
+        # zones — structurally, not by regime-timing.
+        self.min_rr = float(min_rr)
         self.blocked_setups = (
             frozenset(blocked_setups) if blocked_setups is not None
             else self.DEFAULT_BLOCKED_SETUPS
@@ -285,12 +294,18 @@ class ICTAnalyst:
                 continue
             entry = float(zone["entry"])
             direction = zone["direction"]
+            tp = float(zone.get("tp1", zone.get("tp2", entry)))
+            sl = float(zone["sl"])
+            # Structural reward:risk floor (== Signal.rr()). Drop low-RR zones
+            # before dedup so a culled zone never reserves its dedup key.
+            if self.min_rr > 0.0:
+                risk = abs(entry - sl)
+                if risk <= 0.0 or (abs(tp - entry) / risk) < self.min_rr:
+                    continue
             zone_key = (direction, label, round(entry, 1))
             if zone_key in self._emitted_zone_keys:
                 continue
 
-            tp = float(zone.get("tp1", zone.get("tp2", entry)))
-            sl = float(zone["sl"])
             weight = float(zone.get("weight", 0.0))
             confluence_score = max(0.0, min(1.0, weight / self.confluence_max_weight))
 

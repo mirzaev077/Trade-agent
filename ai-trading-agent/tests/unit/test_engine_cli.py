@@ -99,6 +99,23 @@ def test_regime_disabled_when_threshold_zero() -> None:
 # ── --dump-trades (per-trade diagnostics) ─────────────────────────────────────
 
 
+def test_min_rr_defaults_to_zero() -> None:
+    """Omitting --min-rr → 0.0 (floor disabled, reproduces prior runs)."""
+    assert _parse_args(_BASE).min_rr == 0.0
+
+
+def test_min_rr_parses_float() -> None:
+    ns = _parse_args(_BASE + ["--min-rr", "1.0"])
+    assert ns.min_rr == 1.0
+
+
+def test_min_rr_wires_into_analyst() -> None:
+    """Mirror main()'s wiring: --min-rr feeds ICTAnalyst.min_rr verbatim."""
+    ns = _parse_args(_BASE + ["--min-rr", "1.25"])
+    analyst = ICTAnalyst(clock=None, data=None, min_rr=ns.min_rr)
+    assert analyst.min_rr == 1.25
+
+
 def test_dump_trades_defaults_to_none() -> None:
     assert _parse_args(_BASE).dump_trades is None
 

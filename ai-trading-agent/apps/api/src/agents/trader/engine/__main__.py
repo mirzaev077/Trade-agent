@@ -223,6 +223,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--min-rr",
+        type=float,
+        default=0.0,
+        metavar="RR",
+        help=(
+            "Structural reward:risk floor. Drop any zone whose planned "
+            "|tp1-entry|/|entry-sl| < RR before routing. <=0 disables (default), "
+            "reproducing prior runs byte-for-byte. ~1.0 culls the fragile low-RR "
+            "mean-reversion zones that drive the 2025-H2 bleed."
+        ),
+    )
+    p.add_argument(
         "--dump-trades",
         metavar="PATH",
         default=None,
@@ -454,7 +466,13 @@ def main(argv: list[str] | None = None) -> int:
             sorted(regime.blocked_setups), regime.atr_threshold, regime.atr_period,
         )
 
-    analyst = ICTAnalyst(clock=clock, data=data, blocked_setups=blocked, regime=regime)
+    if args.min_rr and args.min_rr > 0:
+        logger.info("Min-RR floor ON: drop zones with planned RR < {}", args.min_rr)
+
+    analyst = ICTAnalyst(
+        clock=clock, data=data, blocked_setups=blocked, regime=regime,
+        min_rr=args.min_rr,
+    )
 
     # NB: BacktestEngine constructs its OWN clock + data manager internally
     # from `config`. We pass the analyst that already references our preloaded
