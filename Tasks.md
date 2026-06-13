@@ -256,13 +256,11 @@ Quyidagi muammolar hal qilindi:
 
 ### F4-4: Monte Carlo robustness 🟢
 - [x] `analysis/monte_carlo.py` (TMAS spec'idan ko'chirish) *(2026-05-23: ~180 satr; `MonteCarloConfig` (n_sims/initial/ruin_threshold/seed), `MonteCarloResult` (p5/p50/p95 + worst_case + p_ruin + streak), helpers `equity_curve`/`max_drawdown_pct`/`longest_losing_streak`, `MonteCarloSimulator.run(pnls)` permutation-based bootstrap; `tests/unit/test_monte_carlo.py` 24 test pass)*
-- [ ] Worst-case drawdown ko'rsatkichi — risk per trade ni qayta sozlash uchun *(F4 deployment fazasida — RiskConfig wire-up)*
+- [x] Worst-case drawdown ko'rsatkichi — risk per trade ni qayta sozlash uchun *(2026-06-13: `analysis/risk_calibration.py` (~290 satr). Engine `StubRisk` qat'iy lot ishlatadi → $-PnL `risk_per_trade`'ga bog'liq EMAS; to'g'ri ko'prik **R-multiple** (`pnl/(|entry-sl|*lot*contract_size)` — lot va contract_size qisqaradi, sizing'dan mustaqil). MC 1% reference risk'da → `worst_dd_per_1pct`; linear (fixed-fractional) yaqinlashish: `worst_dd(r) ≈ worst_dd_per_1pct*r`; `recommended_risk = dd_budget/worst_dd_per_1pct` bounds'ga clamp. RiskConfig wire-up: budjet=`RiskConfig.max_drawdown` (10%), joriy=`risk_per_trade` (1%). Verdict: OK/REDUCE_RISK/ROOM_TO_INCREASE/INSUFFICIENT_DATA; AVTO-MUTATSIYA YO'Q (F1-1 approval-gate falsafasi, faqat tavsiya). offline_validation'ga ulandi: bitta umumiy backtest MC+calib uchun, `--dd-budget-pct/--current-risk-pct/--calib-sims/--skip-risk-calibration` flaglar, `report["risk_calibration"]`. Sanity (46%WR/+0.095R thin edge): worst_dd@1%=21.4% → 1% risk budjetdan oshadi → tavsiya 0.46%. cp1251 console footgun tuzatildi (notes ASCII-only, +regression test). +27 test 508/508, ruff 0.)*
 
 ### F4-5: Strategiya yaxshilashlari 🟢
 - [ ] Yangi setup type'lar — `pending_adjustments` orqali approval bilan
 - [ ] Multi-symbol (XAUUSD + EURUSD + BTCUSD) — alohida faza
-
----
 
 ## 🎯 Qaror nuqtalari (Decision Gates)
 

@@ -1,8 +1,14 @@
 """Offline validation job (F4 Phase B) — heavy backtest validators.
 
-walk-forward + Monte-Carlo over the production config, run OFFLINE (NOT in the
-live MT5 loop) because each needs historical re-runs of the engine. Wire this to
-a monthly Windows Task Scheduler / cron job; it writes a combined JSON report.
+walk-forward + Monte-Carlo + risk calibration over the production config, run
+OFFLINE (NOT in the live MT5 loop) because each needs historical re-runs of the
+engine. Wire this to a monthly Windows Task Scheduler / cron job; it writes a
+combined JSON report.
+
+F4-4 risk calibration: the Monte-Carlo worst-case drawdown is translated into a
+recommended ``risk_per_trade`` via sizing-independent R-multiples, measured
+against the ``RiskConfig.max_drawdown`` budget. Advisory only — no auto-mutation
+(F1-1 approval-gate philosophy). See ``risk_calibration.py``.
 
 reflector_backtest is intentionally EXCLUDED: the backtest engine uses a stub
 reflector (no real treatment), so an A/B comparison would run two identical
@@ -32,8 +38,15 @@ from typing import Callable
 from loguru import logger
 
 from apps.api.src.agents.trader.analysis import monte_carlo as mc
+from apps.api.src.agents.trader.analysis import risk_calibration as rc
 from apps.api.src.agents.trader.analysis import walk_forward as wf
 from apps.api.src.agents.trader.engine.runner import BacktestParams, run_backtest
+from apps.api.src.agents.trader.models.config import RiskConfig
+
+# Live RiskConfig defaults — the Monte-Carlo worst-case DD calibrates *these*.
+_RISK_DEFAULTS = RiskConfig()
+DEFAULT_DD_BUDGET_PCT = _RISK_DEFAULTS.max_drawdown      # 10.0% session DD breaker
+DEFAULT_CURRENT_RISK_PCT = _RISK_DEFAULTS.risk_per_trade  # 1.0% per trade
 
 # ── Production strategy config (= v5rr) ───────────────────────────────────────
 # The v3/v4 CLI blocklist, kept here as the single in-code source of truth so the
@@ -121,6 +134,20 @@ def run_walk_forward(
     return wf.WalkForwardValidator(cfg, factory).run()
 
 
+def monte_carlo_from_trades(
+    closed_trades: list,
+    *,
+    n_simulations: int,
+    initial_balance: float,
+) -> mc.MonteCarloResult:
+    """Realized per-trade PnL → bootstrap Monte-Carlo (pure; no backtest)."""
+    pnls = [float(t.get("pnl") or 0.0) for t in closed_trades]
+    cfg = mc.MonteCarloConfig(
+        n_simulations=n_simulations, initial_balance=initial_balance,
+    )
+    return mc.MonteCarloSimulator(cfg).run(pnls)
+
+
 def run_monte_carlo(
     params: BacktestParams,
     start: datetime,
@@ -131,11 +158,35 @@ def run_monte_carlo(
 ) -> mc.MonteCarloResult:
     """One full-period backtest → realized per-trade PnL → bootstrap MC."""
     arts = run_backtest(start, end, params, progress_every_bars=progress_every_bars)
-    pnls = [float(t.get("pnl") or 0.0) for t in arts.closed_trades]
-    cfg = mc.MonteCarloConfig(
-        n_simulations=n_simulations, initial_balance=params.initial_balance,
+    return monte_carlo_from_trades(
+        arts.closed_trades,
+        n_simulations=n_simulations,
+        initial_balance=params.initial_balance,
     )
-    return mc.MonteCarloSimulator(cfg).run(pnls)
+
+
+def run_risk_calibration(
+    params: BacktestParams,
+    start: datetime,
+    end: datetime,
+    *,
+    dd_budget_pct: float = DEFAULT_DD_BUDGET_PCT,
+    current_risk_pct: float = DEFAULT_CURRENT_RISK_PCT,
+    n_simulations: int = 10_000,
+    progress_every_bars: int = 0,
+) -> rc.RiskCalibrationResult:
+    """F4-4: one backtest → R-multiples → worst-case DD → risk_per_trade tavsiya.
+
+    The DD budget defaults to ``RiskConfig.max_drawdown`` and the current risk to
+    ``RiskConfig.risk_per_trade`` — i.e. the Monte-Carlo worst-case DD calibrates
+    the live risk lever directly. Does NOT mutate config (advisory only)."""
+    arts = run_backtest(start, end, params, progress_every_bars=progress_every_bars)
+    cfg = rc.RiskCalibrationConfig(
+        dd_budget_pct=dd_budget_pct,
+        current_risk_pct=current_risk_pct,
+        n_simulations=n_simulations,
+    )
+    return rc.calibrate(arts.closed_trades, cfg)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -163,9 +214,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--test-months", type=int, default=3)
     p.add_argument("--step-months", type=int, default=3)
     p.add_argument("--mc-sims", type=int, default=10_000)
+    p.add_argument("--calib-sims", type=int, default=10_000,
+                   help="Monte-Carlo sims for the risk calibration R-multiple pass.")
+    p.add_argument("--dd-budget-pct", type=float, default=DEFAULT_DD_BUDGET_PCT,
+                   help="Worst-case DD ceiling for risk calibration (= RiskConfig.max_drawdown).")
+    p.add_argument("--current-risk-pct", type=float, default=DEFAULT_CURRENT_RISK_PCT,
+                   help="Live risk_per_trade to project worst-case DD against.")
     p.add_argument("--progress-every-bars", type=int, default=2000)
     p.add_argument("--skip-walk-forward", action="store_true")
     p.add_argument("--skip-monte-carlo", action="store_true")
+    p.add_argument("--skip-risk-calibration", action="store_true")
     return p.parse_args(argv)
 
 
@@ -196,6 +254,8 @@ def main(argv: list[str] | None = None) -> int:
             "block_extras": list(PRODUCTION_BLOCK_EXTRAS),
             "regime_atr_threshold": args.regime_atr_threshold,
             "min_rr": args.min_rr,
+            "dd_budget_pct": args.dd_budget_pct,
+            "current_risk_pct": args.current_risk_pct,
         },
     }
 
@@ -213,18 +273,44 @@ def main(argv: list[str] | None = None) -> int:
                     wf_res.oos_sharpe, wf_res.oos_profit_factor, wf_res.oos_max_dd_pct,
                     wf_res.oos_total_trades, wf_res.avg_overfit_score)
 
-    if not args.skip_monte_carlo:
-        logger.info("=== Monte-Carlo ({} sims) ===", args.mc_sims)
-        mc_res = run_monte_carlo(
-            params, start, end,
-            n_simulations=args.mc_sims, progress_every_bars=args.progress_every_bars,
+    # Monte-Carlo and risk calibration both derive from the realized trade set, so
+    # run ONE backtest over the full period and feed its closed trades to both.
+    if not args.skip_monte_carlo or not args.skip_risk_calibration:
+        logger.info("=== Backtest (full period) for Monte-Carlo + risk calibration ===")
+        arts = run_backtest(
+            start, end, params, progress_every_bars=args.progress_every_bars,
         )
-        report["monte_carlo"] = mc_res.to_dict()
-        logger.info("Monte-Carlo: p_ruin={:.3f}  final_eq p5/p50/p95=${:.0f}/${:.0f}/${:.0f}  "
-                    "worst_dd={:.1f}%  p95_losing_streak={}",
-                    mc_res.probability_of_ruin, mc_res.final_equity_p5,
-                    mc_res.final_equity_p50, mc_res.final_equity_p95,
-                    mc_res.worst_case_dd_pct, mc_res.expected_max_losing_streak_p95)
+        closed = arts.closed_trades
+
+        if not args.skip_monte_carlo:
+            logger.info("=== Monte-Carlo ({} sims) ===", args.mc_sims)
+            mc_res = monte_carlo_from_trades(
+                closed, n_simulations=args.mc_sims,
+                initial_balance=params.initial_balance,
+            )
+            report["monte_carlo"] = mc_res.to_dict()
+            logger.info("Monte-Carlo: p_ruin={:.3f}  final_eq p5/p50/p95=${:.0f}/${:.0f}/${:.0f}  "
+                        "worst_dd={:.1f}%  p95_losing_streak={}",
+                        mc_res.probability_of_ruin, mc_res.final_equity_p5,
+                        mc_res.final_equity_p50, mc_res.final_equity_p95,
+                        mc_res.worst_case_dd_pct, mc_res.expected_max_losing_streak_p95)
+
+        if not args.skip_risk_calibration:
+            logger.info("=== Risk calibration (DD budget {:.1f}%, current risk {:.2f}%) ===",
+                        args.dd_budget_pct, args.current_risk_pct)
+            calib_cfg = rc.RiskCalibrationConfig(
+                dd_budget_pct=args.dd_budget_pct,
+                current_risk_pct=args.current_risk_pct,
+                n_simulations=args.calib_sims,
+            )
+            calib_res = rc.calibrate(closed, calib_cfg)
+            report["risk_calibration"] = calib_res.to_dict()
+            logger.info("Risk calibration: verdict={}  valid_trades={}  worst_dd@1%={:.2f}%  "
+                        "projected_worst_dd@{:.2f}%={:.1f}%  recommended_risk={:.2f}%",
+                        calib_res.verdict, calib_res.n_trades_valid,
+                        calib_res.worst_dd_per_1pct, calib_res.current_risk_pct,
+                        calib_res.projected_worst_dd_pct, calib_res.recommended_risk_pct)
+            logger.info("  {}", calib_res.notes)
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
