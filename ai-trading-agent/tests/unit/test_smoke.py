@@ -230,6 +230,52 @@ def test_config_defaults_pass_validation(clean_config_env):
     assert cfg.symbol == "XAUUSD"
 
 
+# F5-3: regime gate config + F5-4: blocked-setup list parsing.
+
+def test_config_regime_gate_defaults_off(clean_config_env):
+    # Back-compat: gate disabled by default so behaviour is unchanged unless set.
+    cfg = TradingConfig(_env_file=None)
+    assert cfg.regime_atr_threshold == 0.0
+    assert cfg.regime_atr_period == 14
+
+
+def test_config_rejects_regime_atr_threshold_out_of_range(clean_config_env):
+    with pytest.raises(ValidationError):
+        TradingConfig(_env_file=None, regime_atr_threshold=-1.0)
+
+
+def test_config_blocked_setups_defaults_empty(clean_config_env):
+    cfg = TradingConfig(_env_file=None)
+    assert cfg.get_blocked_setups() == set()
+
+
+def test_config_blocked_setups_parses_csv(clean_config_env):
+    # Whitespace + trailing/empty commas are stripped.
+    cfg = TradingConfig(_env_file=None, blocked_setups=" M15_OB , H1_OB ,,")
+    assert cfg.get_blocked_setups() == {"M15_OB", "H1_OB"}
+
+
+# F5-6: trades.csv lot column must persist the real position size (was hardcoded 0.0).
+
+def test_log_trade_csv_persists_lot(tmp_path, monkeypatch):
+    import csv as _csv
+
+    from apps.api.src.agents.trader.utils import trade_analytics as ta
+
+    csv_path = tmp_path / "trades.csv"
+    monkeypatch.setattr(ta, "_CSV_PATH", str(csv_path))
+    ta.log_trade_csv(
+        direction="buy", symbol="XAUUSD", entry=2000.0, exit_price=2010.0,
+        sl=1995.0, tp1=2010.0, lot=0.05, pnl=5.0, result="win",
+        label="H1_OB", tf="H1", mode="FLOW", session="LONDON", regime="trend",
+        sl_pips=50.0, tp_pips=100.0,
+    )
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        rows = list(_csv.DictReader(f))
+    assert len(rows) == 1
+    assert float(rows[0]["lot"]) == 0.05   # the F5-6 fix: not 0.0
+
+
 # ---------------------------------------------------------------------------
 # Category 6 — State persistence save/load round-trip
 # ---------------------------------------------------------------------------

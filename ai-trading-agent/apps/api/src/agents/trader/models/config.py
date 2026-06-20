@@ -90,6 +90,21 @@ class TradingConfig(BaseSettings):
     max_trades_per_day:  int   = Field(25,   ge=1, le=100)
     max_drawdown:        float = Field(10.0, gt=0, le=50.0)   # F1-2 fix: avval env binding yo'q edi
 
+    # ── F5-3: High-vol regime gate (engine/regime.py RegimeGate) ──
+    # M15 ATR% (ATR/price*100) shu chegaradan oshsa → mo'rt reversion
+    # setuplar (M15_OB/BB/CISD) bloklanadi. 2025-Q2 (yuqori-vol trend)
+    # halokati himoyasi. 0.0 = o'chirilgan (back-compat); jonli production
+    # qiymati 0.18 (calibrated, engine PRODUCTION_REGIME_ATR bilan bir xil).
+    regime_atr_threshold: float = Field(0.0, ge=0.0, le=5.0)
+    regime_atr_period:    int   = Field(14,  ge=1,  le=200)
+
+    # ── F5-4: Setup-level block list (.env BLOCKED_SETUPS, vergul bilan) ──
+    # Bu label'lardagi setuplar jonli botda UMUMAN savdo qilinmaydi (regime'dan
+    # qat'i nazar), backtest DEFAULT_BLOCKED_SETUPS mexanizmiga o'xshash.
+    # Default bo'sh = hech narsa bloklanmaydi (back-compat). Jonli .env'da
+    # "M15_OB" (past-WR setup, foydalanuvchi qarori 2026-06-20).
+    blocked_setups: str = Field("")
+
     # ── AI Brain ──
     claude_api_key:    str   = Field("")
     min_ai_confidence: float = Field(0.70, ge=0.0, le=1.0)    # F1-2 fix: avval env binding yo'q edi
@@ -116,6 +131,13 @@ class TradingConfig(BaseSettings):
                 f"daily_max_risk ({self.daily_max_risk}%)"
             )
         return self
+
+    def get_blocked_setups(self) -> set[str]:
+        """F5-4: `.env BLOCKED_SETUPS` ("M15_OB,H1_OB") → normalized set.
+
+        Bo'sh/oraliq probellar tashlanadi; bo'sh string → bo'sh set.
+        """
+        return {s.strip() for s in self.blocked_setups.split(",") if s.strip()}
 
     def get_risk_config(self) -> RiskConfig:
         return RiskConfig(

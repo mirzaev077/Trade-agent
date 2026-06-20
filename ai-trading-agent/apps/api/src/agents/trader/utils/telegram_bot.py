@@ -13,7 +13,6 @@ F3 (2026-05-23): inbound command polling.
 import os
 import json
 import threading
-import time
 import urllib.request
 import urllib.error
 from typing import Callable
@@ -60,6 +59,13 @@ async def send(text: str, parse_mode: str = "HTML"):
             await s.post(url, json=payload)
     except Exception as e:
         logger.debug(f"Telegram send error: {e}")
+
+
+def send_sync(text: str, parse_mode: str = "HTML") -> None:
+    """Sync counterpart of :func:`send` — for non-async contexts (CLI / Task
+    Scheduler jobs like the F4-2 monthly validation). Resolves token/chat from
+    module globals or env; never raises."""
+    _send_sync(text, parse_mode)
 
 
 async def notify_order(action: str, direction: str, symbol: str,

@@ -34,7 +34,7 @@
 
 ### 🔴 Hali qoldi
 - ~~F1-1 oxirgi test: 50-trade end-to-end scenario~~ → **2026-05-23 yakunlandi**: `tests/unit/test_self_learner_50_trades.py` (3 ta test, 284/284 pytest pass)
-- **F2-3.1 ICTAnalyst limit-order fix:** 2026-05-19 da real 2024-2025 XAUUSD backtest run qilindi → **REJECT (0 trade)**. Sabab: MVP analyst eng kuchli OB tanlaydi, narx zonada bo'lishini kutadi — 49.7% bar'da narx OB'dan uzoq. Fix: limit-order support (Variant B) yoki `_find_all_ict_zones` to'liq port (Variant C). Batafsil: `reports/f2-3_acceptance_2024-2025.md`
+- ~~**F2-3.1 ICTAnalyst limit-order fix**~~ → **2026-06-20 YAKUNLANDI.** Variant B+C port qilindi; 24-oy v5rr acceptance TUGADI: **3015 savdo, net +$644.23, 7 WARN / 1 REJECT** (q2_2025). Formal validation (2026-06-09): robust+safe, low-edge, demo-ready. Batafsil: F2-3.1 bo'limi quyida.
 
 ### 🟡 Live'ga halaqit qilmaydi, lekin operatsion xavfli
 - Healthcheck endpoint yo'q
@@ -178,7 +178,7 @@ Quyidagi muammolar hal qilindi:
 - [x] **Smoke C 1 oy (filterless):** 314 trade, WR=42%, PF=0.72, PnL=-$99 — multi-TF infra ishlayapti
 - [x] **Smoke C 1 oy (filtered M15_OTE+M15_DR_Eq):** 223 trade, WR=47.5%, PF=0.96, PnL=-$10.20 (breakeven yaqin)
 - [x] **Engine hot-fix — progress logging** *(2026-05-23: F2 silent 5h run muammosini hal qildi — `engine/engine.py` ga `_estimate_total_bars()` + `_log_progress()` + `progress_every_bars` constructor param; `engine/__main__.py` ga `--progress-every-bars` CLI flag (default 1000); 1-haftalik synthetic'da `[progress] bars 300/672 (44.6%) | trades 64 | elapsed 163s | ETA 202s` ko'rinishi tasdiqlangan; 0 regression)*
-- [⏸] **Acceptance:** 24 oy 2024-2025 acceptance run — **kechiktirildi oxirgi fazaga** *(2026-05-23: 1-urinish 5+h da tugamadi, kill qilindi; 8-chunk split-strategy boshlangan, Q1 2024 tugadi: 795 trade, WR 46.79%, PF 0.88, REJECT, top loser H1_DR_Eq -$96; foydalanuvchi tasks-bitirib-oxirida-qaytarish strategiyasini tanladi. Q1 natija saqlanadi: `reports/acceptance_24m/q1_2024/`)*
+- [x] **Acceptance:** 24 oy 2024-2025 acceptance run — **TUGADI (v5rr, hujjatlashtirildi 2026-06-20)** *(Eski 5h muammosi engine perf-fix (1308d10, ~9x tez) bilan hal bo'ldi. Yakuniy authoritative config = v5rr (`run_v5rr.ps1`): v4 blocklist + regime gate @0.18 + H1_OB DEFAULT_BLOCKED + structural min-RR floor 1.0. Natija (`_parsed_v5rr.json`, 8 chorak): **3015 savdo, net +$644.23, 7 WARN / 1 REJECT** (faqat q2_2025 −$94, adverse high-vol trend regime — ACCEPT). Formal validation (walk-forward 6 OOS + MC 10k) 2026-06-09 da: OOS PF 1.164≈in-sample 1.175 (overfit yo'q), worst-DD 2.34%, p_ruin 0 → strategiya ROBUST+SAFE, low-edge, demo-ready. F5 o'zgarishlaridan faqat F5-4 (M15_OB blok) backtest'ga ta'sir qiladi: first-order +$644→+$629 (−$15, M15_OB net-musbat bo'lgani uchun; foydalanuvchi xavfsizlik uchun blokni tanladi). F5-3 (regime gate @0.18) ALLAQACHON v5rr ichida. F5-1 (risk) / F5-6 (lot) backtest PnL'ga ta'sirsiz. Authoritative F5-4-variant run foydalanuvchi tanlovi bilan O'TKAZILMADI (verdict o'zgarishi kam ehtimol).)*
 - [ ] (Optional) D1 + M30 ma'lumotini yuklash → to'liq paradigma (`scripts/download_mt5_history.py`)
 
 ### F2-4: Demo natijalarini hisobot qilish 🟡
@@ -244,15 +244,15 @@ Quyidagi muammolar hal qilindi:
 > **TMAS pattern:** `WalkForwardValidator` — bu yerda **bir marta oyiga** ishlatiladi
 
 - [x] `analysis/walk_forward.py` (TMAS spec'idan ko'chirish) *(2026-05-23: ~280 satr; `WalkForwardConfig/Window/Result`, `build_windows`, `calc_overfit_score`, `_verdict`, `WalkForwardValidator.run()` engine_factory pattern bilan; parameter optimization YO'Q — joriy parametrlar bilan train/test drift o'lchanadi; `tests/unit/test_walk_forward.py` 20 test pass)*
-- [ ] Oyiga 1 marta: oxirgi 12 oyda walk-forward, overfit score chiqarish *(F4 deployment fazasida — scheduler wire-up)*
-- [ ] Overfit > 0.6 bo'lsa — Telegram OGOHLANTIRISH *(F4 deployment fazasida)*
+- [x] Oyiga 1 marta: oxirgi 12 oyda walk-forward, overfit score chiqarish *(2026-06-20: scheduler wire-up. `scripts/monthly_validation.ps1` — Windows Task Scheduler skript (trailing -MonthsBack oyna, default 12; -Start/-End override; schtasks ro'yxatdan o'tkazish buyrug'i izohda). JONLI LOOP'da EMAS — walk-forward ko'p backtest (daqiqa-soat), tick'ni bloklardi; offline_validation.py muallifi shu uchun offline mo'ljallagan.)*
+- [x] Overfit > 0.6 bo'lsa — Telegram OGOHLANTIRISH *(2026-06-20: `offline_validation.py` ga `--telegram` flag + `--overfit-threshold` (default 0.6) + pure `build_validation_alert(report) -> (is_warning, text)` (overfit>0.6 YOKI verdict REJECT → ⚠️; MC p_ruin + risk-calib seksiyalarni ko'rsatadi). Sync yuborish uchun `telegram_bot.send_sync()` qo'shildi (async `send` juftligi). cp1251 console footgun: CLI help ASCII-only (emoji faqat Telegram matnida, HTTP/UTF-8). +9 test (8 alert builder + 1 CLI flag), 532/532, ruff 0 (touched files).)*
 
 ### F4-3: Reflector A/B test 🟢
 > **TMAS pattern:** `ReflectorBacktester` — self-learner haqiqatan foyda berayotganini tekshirish
 
 - [x] `analysis/reflector_backtest.py` (TMAS spec'idan ko'chirish) *(2026-05-23: ~240 satr; `ReflectorABConfig` (thresholds), `ReflectorABResult`, `_verdict` heuristic (HARMFUL/BENEFICIAL/NEUTRAL/WARN), `ReflectorBacktester.run_comparison()` engine_factory `(start, end, treatment_on)` pattern bilan; paired t-test daily_returns talab qiladi — bizning BacktestResult'da hozircha yo'q, aggregate Sharpe/DD ratio'lar bilan ishlatildi; `tests/unit/test_reflector_backtest.py` 16 test pass)*
-- [ ] Oyiga 1 marta: SelfLearner ON vs OFF backtest *(F4 deployment fazasida — scheduler wire-up)*
-- [ ] Agar verdict HARMFUL — Telegram'ga "SelfLearner foyda bermayapti, o'chirish kerak" *(F4 deployment fazasida)*
+- [⛔] Oyiga 1 marta: SelfLearner ON vs OFF backtest *(2026-06-20: BLOKLANGAN — scheduler wire-up MUMKIN EMAS. Sabab: backtest engine `StubReflector` ishlatadi (engine.py:103) va SelfLearner loop yo'q → "treatment ON vs OFF" AYNAN bir xil ikki backtest → har doim NEUTRAL no-op. offline_validation.py muallifi shu sabab reflectorni ataylab chiqargan. Soxta NEUTRAL hisobot yuborish = soxta ishonch. F4-3 ni ulashdan OLDIN haqiqiy Reflector/SelfLearner engine'ga port qilinishi shart (alohida, katta task — scheduler wire-up emas). reflector_backtest.py + reflector_backtest A/B logikasi TAYYOR, faqat engine treatment yo'q.)*
+- [⛔] Agar verdict HARMFUL — Telegram'ga "SelfLearner foyda bermayapti" *(Yuqoridagi sabab bilan bloklangan. Reflector engine'ga ulangach, build_validation_alert pattern'i (F4-2) bilan oson qo'shiladi.)*
 
 ### F4-4: Monte Carlo robustness 🟢
 - [x] `analysis/monte_carlo.py` (TMAS spec'idan ko'chirish) *(2026-05-23: ~180 satr; `MonteCarloConfig` (n_sims/initial/ruin_threshold/seed), `MonteCarloResult` (p5/p50/p95 + worst_case + p_ruin + streak), helpers `equity_curve`/`max_drawdown_pct`/`longest_losing_streak`, `MonteCarloSimulator.run(pnls)` permutation-based bootstrap; `tests/unit/test_monte_carlo.py` 24 test pass)*
@@ -262,6 +262,61 @@ Quyidagi muammolar hal qilindi:
 - [ ] Yangi setup type'lar — `pending_adjustments` orqali approval bilan
 - [ ] Multi-symbol (XAUUSD + EURUSD + BTCUSD) — alohida faza
 
+---
+
+## 💹 FAZA 5 — Foydani xavfsiz oshirish + jonli kuzatuv (2026-06-18)
+
+> **Maqsad:** foydani oshirish (xavf 2% + yomon davr filtri) va jonli demo kuzatuvni boshlash.
+> **Asos:** 5-agentli Monte-Carlo halokat tahlili (2026-06-18) + 2 yillik tarixiy sinov.
+> **Tasdiqlangan qaror:** xavf **max 2%**, yomon davr filtri, demo'da 100+ savdo kuzatuv.
+> **Asosiy xulosa:** "kuniga 2%" MUMKIN EMAS (~2.8% xavf kerak → bitta yomon chorakda hisob yarmini yo'qotish ehtimoli 24–42%). 2%/savdo = yillik ~6.4%, eng yomon cho'kish ~4.6%.
+
+### F5-1: Jonli xavfni nazoratga olish (3% → 2%) ✅ — 2026-06-20 BAJARILDI
+- [x] ⚠️ **TOPILMA (2026-06-18):** jonli bot `agent.py:79` `RISK_SNIPER=0.03` va `agent.py:87` `RISK_FLOW=0.03` —
+  ya'ni **3% xavf** bilan ishlayapti. `.env` `RISK_PER_TRADE=1.0` va `agent.py:94` `RISK_PCT=0.01` **e'tiborga olinmayapti** (sizing faqat RISK_SNIPER/FLOW dan).
+- [x] `RISK_SNIPER`/`RISK_FLOW` ni `.env` `RISK_PER_TRADE` dan o'qiydigan qilish (qattiq yozilgan emas). *(2026-06-20: `agent.py.__init__` da `risk_frac = config.risk_per_trade/100.0` → `self.RISK_SNIPER/FLOW/PCT` instance ustiga yoziladi; class-konstantalar default 0.02 ga tushirildi + izoh ".env bilan ustiga yoziladi")*
+- [x] Qiymatni **2%** ga o'rnatish (hozirgi 3% dan PASAYTIRADI — xavfsizroq). *(`.env` `RISK_PER_TRADE=1.0→2.0`; invariant `DAILY_MAX_RISK=5.0 >= 2.0` OK)*
+- [x] **Tekshirish:** sizing 2% berishini bitta savdoda tasdiqlash (`Risk: 2.0%` log'da). *(startup log: `Risk per trade: 2.00% (SNIPER=FLOW=0.0200, .env'dan)`; instance RISK_SNIPER/FLOW/PCT=0.02 tasdiqlandi; smoke 24/24 pass)*
+
+### F5-2: Kunlik xavf chegarasini qayta ko'rish 🟠
+- [ ] Hozir `.env` `DAILY_MAX_RISK=5.0`. 2%/savdo da bu ~2.5 to'liq zararga teng.
+- [ ] Qaror: 4% atrofida (≈2 zararli savdodan keyin "faqat boshqarish" rejimi).
+
+### F5-3: Yomon davr (trend rejimi) filtrini jonli botga ulash ✅ — 2026-06-20 BAJARILDI
+- [x] ⚠️ **TOPILMA:** jonli bot faqat `regime == "chop"` da to'xtaydi (`agent.py:669`), **"trend" da EMAS**.
+  Lekin 2025-Q2 halokati (−$94, yutuq 28%) aynan KUCHLI TREND rejimida bo'lgan.
+- [x] Backtest'da tayyor filtr bor: `engine/__main__.py:197` `--regime-atr-threshold` (yuqori volatillikda
+  M15_OB/BB/CISD bloklaydi). Shu mantiqni jonli `agent.py` ga ko'chirish/ulash. *(2026-06-20: backtest'dagi pure `engine/regime.py:RegimeGate` to'g'ridan-to'g'ri qayta ishlatildi (kod takrori YO'Q — modul aynan "live trader uchun" yozilgan edi). `TraderAgent.__init__` da `self.regime_gate = RegimeGate(atr_threshold, atr_period)`; `_tick` da chop-check'dan keyin M15'da `regime_atr_pct` bir marta hisoblanadi (`m15` DataFrame, ATR% _calc_atr bilan byte-mos); `_place_zone_limits` ga `regime_atr_pct` param sifatida uzatiladi va placement loop'da `should_block(label, atr%)` bo'lsa zona skip + log. Config: `TradingConfig.regime_atr_threshold/period` (`.env` REGIME_ATR_THRESHOLD/PERIOD; default 0.0=o'chiq back-compat). Jonli `.env`=0.18 (production calibrated). Tasdiq: startup log `Regime gate ON: M15 ATR% > 0.18 → blok [M15_BB, M15_CISD, M15_OB]`; live labellar (agent.py:1141 M15_OB / 1146 M15_BB / 1243 M15_CISD) gate bilan AYNAN mos; should_block semantikasi (high-vol blok / normal o'tkazadi / H1_OB o'tkazadi) tasdiqlandi; 519/519 pytest, ruff 0.)*
+
+### F5-4: `M15_OB` sifatsiz signalini cheklash ✅ — 2026-06-20 BAJARILDI (butunlay blok)
+- [x] Eng katta zarar manbai: 2025-Q2 da 120 savdo, WR 26%, −$40 (chorak zararining yarmidan ko'pi).
+  2025-Q1 da ham zararda (−$10). Yuqori volatillikda butunlay bloklash yoki sifat balini oshirish.
+- **📊 DATA (v5rr, 24oy per-setup):** M15_OB 1006 savdo, net **+$15.38** (foydali!). Foydali choraklar: q2_2024 +$30, q3_2024 +$15, q3_2025 +$38. Eng katta zarar q2_2025 −$40 = **F5-3 high-vol gate allaqachon bloklaydigan** chorak (~50% barlar). Qolgan normal-regime zararlar kichik (−$2..−$10). Data **butunlay blokni rad etadi** (+$83 foyda yo'qoladi, F5-3 mantiqiga zid). Foydalanuvchiga AskUserQuestion bilan ko'rsatildi.
+- **QAROR (2026-06-20):** Foydalanuvchi dalillarni ko'rib ham **"M15_OB butunlay blok"** ni tanladi (maksimal xavfsizlik, past-WR setupni umuman xohlamaydi).
+- [x] Implementatsiya: config-driven block list (backtest `DEFAULT_BLOCKED_SETUPS` mexanizmiga o'xshash). `TradingConfig.blocked_setups` (`.env BLOCKED_SETUPS`, vergul bilan) + `get_blocked_setups()` parser; `TraderAgent.__init__` da `self.blocked_setups`; `_place_zone_limits` placement loop'da (yagona chokepoint — barcha zona manbalari + market/limit yo'llar shu yerdan o'tadi) F5-3 gate yonida `label in blocked_setups` → skip+log `⛔`. Jonli `.env BLOCKED_SETUPS=M15_OB`; default bo'sh (back-compat). +4 test (parser empty/csv, regime defaults off, range reject) 523/523, ruff 0.
+
+### F5-5: Jonli demo kuzatuv — 100+ savdo (≈30 kun) 🔵 — HOZIR BOSHLANDI
+- [ ] Demo'da uzluksiz ishlatish. Sabab: hozir atigi **13 ta haqiqiy savdo** — juda kam, bitta savdo ($58) natijani buzadi.
+- [ ] Kunlik: nechta savdo, yutuq/zarar, sof PnL, joriy yutuq ulushi (`brain/trades.csv` dan).
+- [ ] Bot ichidagi kunlik/haftalik Telegram hisobotidan foydalanish.
+- [ ] **Baseline (2026-06-18):** 13 savdo, 2 yutuq / 11 zarar (WR ~15%), sof **+$37.48** ($88.86 − $51.38).
+  $58 savdosiz → −$21 (zararda). 1 savdo = shovqin, signal emas.
+
+### F5-6: `lot` (pozitsiya hajmi) yozuvini tuzatish ✅ — 2026-06-20 BAJARILDI
+- [x] ⚠️ Hozir `trades.csv` da `lot=0.0` yoziladi (saqlanmaydi). *(2026-06-20: ildiz sabab — `log_trade_csv(... lot=0.0 ...)` chaqiruvida QATTIQ YOZILGAN 0.0 (`agent.py:2472`), meta'da lot saqlanmas edi. `get_closed_position` faqat {profit, price_close} qaytaradi (volume yo'q) → lot order qo'yish/fill paytida saqlanishi shart. 3 ta meta-yaratish yo'li: (1) market `_trade_meta` → `"lot": lot_each`; (2) limit fill `_trade_meta` → `"lot": float(filled["volume"])` (MT5 haqiqiy hajmi); (3) `recover_from_mt5` ALLAQACHON `"lot": pos["volume"]` saqlardi. CSV log + CLOSED Telegram notify endi `meta.get("lot")` o'qiydi (avval qattiq 0.0). +1 test (CSV lot column persists 0.05). 524/524, ruff 0.)*
+- [⚠️] $58 yutuq −$5 zararlardan ~7x katta hajmda bo'lgan — nazoratsiz hajm bo'lishi mumkin. Tekshirish + to'g'ri yozish. *(Yozish TUZATILDI. Tekshirish: tarixiy trades.csv da lot=0.0 → o'tmishni qayta tiklab bo'lmaydi (close history'da volume yo'q). Bundan keyin haqiqiy hajm ko'rinadi. Hajm pozitsiya-sizing'dan (`risk_amt_z/(sl_pts*tick_val)`, agent.py:2019) — SL masofasi va risk%'ga bog'liq; F5-1 endi 2% qildi. Real account'da F3-2 da 0.05 lot cap rejalashtirilgan. Live lot cap qo'shish ixtiyoriy keyingi qadam.)*
+
+### F5-7: Edge oshirish (kuzatuvdan KEYIN) 🟢
+- [ ] 2025-Q2 filtri ko'rmagan davrlarda (OOS) ishlashini sinash — overfit bo'lmasligi uchun.
+- [ ] Foydani uzoqroq yetkazish (TP masofasi) — yutuqlarni kattalashtirib edge oshirish.
+
+### Faza 5 Acceptance
+- [ ] Jonli xavf `.env` orqali boshqariladi va 2% (3% emas).
+- [ ] Trend rejimida himoya yoqilgan (2025-Q2 takrorlanmaydi).
+- [ ] Demo'da 100+ savdodan keyin real WR + sof PnL backtest bilan **mos** (overfit yo'q).
+
+---
+
 ## 🎯 Qaror nuqtalari (Decision Gates)
 
 Har faza oxirida **GO / NO-GO** qaror:
@@ -270,7 +325,7 @@ Har faza oxirida **GO / NO-GO** qaror:
 |---|---|---|
 | 0 → 1 | ✅ 2026-05-14: 68/68 offline test passed. Demo stress test F3'da qoladi | — |
 | 1 → 2 | ✅ 2026-05-14: 243/243 pytest passed, config validation ishlaydi, ruff 0 errors | — |
-| 2 → 3 | ⏳ Backtest CI low > 50%, demo natijalari mos (real historical data bilan run kerak) | Strategiya tuzatish (Faza 2 da qoladi) |
+| 2 → 3 | 🟡 Backtest TUGADI (v5rr 24oy: +$644, 7WARN/1REJ, PF1.175). Formal validation: ROBUST+SAFE, low-edge → **DEMO-ready** (real kapitalga edge yupqa). Strict "CI low > 50% WR" SHARTI BAJARILMAYDI (past-WR/PF-musbat mean-reversion kitob) — demo uchun ACCEPT, real uchun ehtiyot. Demo natijalari mosligi F5-5 (100+ savdo) da tekshiriladi | Strategiya tuzatish (Faza 2 da qoladi) |
 | 3 → Real | 7 kun demo uzluksiz, manual review bo'lib o'tdi | Demo'da qolish, fix qilib qaytarish |
 | 3 (Demo) → 3 (Real) | Birinchi 7 kun real'da DD < 5% | Real'ni to'xtatib, root cause analiz |
 

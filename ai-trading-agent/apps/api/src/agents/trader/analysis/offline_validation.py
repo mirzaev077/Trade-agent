@@ -60,6 +60,9 @@ PRODUCTION_BLOCK_EXTRAS: tuple[str, ...] = (
 PRODUCTION_REGIME_ATR = 0.18
 PRODUCTION_MIN_RR = 1.0
 
+# F4-2: walk-forward overfit score above this → Telegram OGOHLANTIRISH.
+OVERFIT_WARN_THRESHOLD = 0.6
+
 
 def production_params(
     symbol: str,
@@ -189,6 +192,56 @@ def run_risk_calibration(
     return rc.calibrate(arts.closed_trades, cfg)
 
 
+# ── F4-2: monthly Telegram alert ───────────────────────────────────────────────
+
+def build_validation_alert(
+    report: dict, *, overfit_threshold: float = OVERFIT_WARN_THRESHOLD,
+) -> tuple[bool, str]:
+    """Pure: validation report dict → ``(is_warning, telegram_text)``.
+
+    F4-2 rule: walk-forward ``avg_overfit_score > overfit_threshold`` OR a REJECT
+    verdict raises a warning. Monte-Carlo and risk-calibration sections are
+    surfaced when present. Pure + side-effect-free so the threshold logic is
+    unit-testable without running any backtest.
+    """
+    wf = report.get("walk_forward") or {}
+    overfit = float(wf.get("avg_overfit_score", 0.0) or 0.0)
+    wf_verdict = str(wf.get("verdict", "N/A"))
+    overfit_hot = overfit > overfit_threshold
+    is_warning = overfit_hot or wf_verdict == "REJECT"
+
+    win = report.get("window") or {}
+    head = "⚠️ Oylik validatsiya — OGOHLANTIRISH" if is_warning else "✅ Oylik validatsiya — OK"
+    lines = [head, f"Oyna: {win.get('start', '?')[:10]} → {win.get('end', '?')[:10]}", ""]
+
+    if wf:
+        warn_tag = f"  ⚠️ > {overfit_threshold}" if overfit_hot else ""
+        lines += [
+            f"Walk-forward: {wf_verdict}",
+            f"  Overfit: {overfit:.2f}{warn_tag}",
+            f"  OOS Sharpe {float(wf.get('oos_sharpe', 0.0)):.2f} | "
+            f"PF {float(wf.get('oos_profit_factor', 0.0)):.2f} | "
+            f"DD {float(wf.get('oos_max_dd_pct', 0.0)):.1f}%",
+            f"  Oyna={wf.get('n_windows', 0)}  OOS savdo={wf.get('oos_total_trades', 0)}",
+        ]
+
+    mc = report.get("monte_carlo") or {}
+    if mc:
+        lines.append(
+            f"Monte-Carlo: p_ruin={float(mc.get('probability_of_ruin', 0.0)):.3f}  "
+            f"worst-DD={float(mc.get('worst_case_dd_pct', 0.0)):.1f}%"
+        )
+
+    calib = report.get("risk_calibration") or {}
+    if calib:
+        lines.append(
+            f"Risk calib: {calib.get('verdict', 'N/A')}  "
+            f"tavsiya risk={float(calib.get('recommended_risk_pct', 0.0)):.2f}%"
+        )
+
+    return is_warning, "\n".join(lines)
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def _parse_date_utc(s: str) -> datetime:
@@ -224,6 +277,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--skip-walk-forward", action="store_true")
     p.add_argument("--skip-monte-carlo", action="store_true")
     p.add_argument("--skip-risk-calibration", action="store_true")
+    p.add_argument("--telegram", action="store_true",
+                   help="F4-2: send a Telegram summary (warns if overfit>0.6 / REJECT) "
+                        "after the report is written. Reads token/chat from .env.")
+    p.add_argument("--overfit-threshold", type=float, default=OVERFIT_WARN_THRESHOLD,
+                   help="Walk-forward overfit score that triggers the Telegram warning.")
     return p.parse_args(argv)
 
 
@@ -319,6 +377,22 @@ def main(argv: list[str] | None = None) -> int:
         json.dump(report, f, indent=2, default=str)
     logger.info("Report written -> {}", out_path)
     print(f"validation_report: {out_path}")
+
+    # F4-2: monthly Telegram alert (⚠️ on overfit>threshold / REJECT).
+    if args.telegram:
+        is_warning, text = build_validation_alert(
+            report, overfit_threshold=args.overfit_threshold,
+        )
+        try:
+            from apps.api.src.agents.trader.models.config import TradingConfig
+            from apps.api.src.agents.trader.utils import telegram_bot as tg
+            cfg = TradingConfig()
+            tg.init(cfg.telegram_bot_token, cfg.telegram_chat_id)
+            tg.send_sync(text)
+            logger.info("Telegram alert sent (warning={})", is_warning)
+        except Exception as e:  # noqa: BLE001 — alert must never fail the job
+            logger.error("Telegram alert failed: {}", e)
+
     return 0
 
 

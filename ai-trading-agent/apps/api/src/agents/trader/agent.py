@@ -8,6 +8,7 @@ from .brain.ai_validator import TradingAIBrain
 from .brain.self_learner import SelfLearner
 from .risk.manager import RiskManagement
 from .models.config import TradingConfig
+from .engine.regime import RegimeGate  # F5-3: high-vol regime gate (backtest'dan ulanadi)
 from .models.orders import TradeOrder
 from .models.signals import TradeSignal
 from .utils.session_times import (
@@ -76,7 +77,7 @@ class TraderAgent:
     TP_SNIPER_1   = 40   # pips (min TP)
     TP_SNIPER_2   = 100  # pips
     TP_SNIPER_3   = 150  # pips (impuls bo'lsa 250 ga o'zgaradi)
-    RISK_SNIPER   = 0.03 # 3%
+    RISK_SNIPER   = 0.02 # default; __init__'da .env RISK_PER_TRADE bilan ustiga yoziladi
 
     # FLOW MODE: range / manipulation zone
     SL_FLOW_MIN   = 40   # pips
@@ -84,7 +85,7 @@ class TraderAgent:
     TP_FLOW_1     = 40   # pips (min TP)
     TP_FLOW_2     = 100  # pips
     TP_FLOW_3     = 150  # pips (impuls bo'lsa 250 ga o'zgaradi)
-    RISK_FLOW     = 0.03  # 3%
+    RISK_FLOW     = 0.02  # default; __init__'da .env RISK_PER_TRADE bilan ustiga yoziladi
 
     # Derived (set dynamically per tick based on mode)
     SL_MIN_PIPS = 40
@@ -99,6 +100,46 @@ class TraderAgent:
         self.config  = config or TradingConfig()
         self.running = False
         self.symbol  = self.config.symbol
+
+        # ── F5-1: Risk per trade .env (RISK_PER_TRADE) dan o'qiladi ──
+        # Ilgari RISK_SNIPER/RISK_FLOW qattiq yozilgan 3% edi va .env
+        # e'tiborga olinmas edi. Endi config'dan (foiz → fraksiya) olinadi,
+        # shu sababli class-konstantalarni instance darajasida ustiga yozamiz.
+        # config.risk_per_trade foiz birligida (masalan 2.0 = 2%).
+        risk_frac        = self.config.risk_per_trade / 100.0
+        self.RISK_SNIPER = risk_frac
+        self.RISK_FLOW   = risk_frac
+        self.RISK_PCT    = risk_frac
+        logger.info(
+            f"Risk per trade: {self.config.risk_per_trade:.2f}% "
+            f"(SNIPER=FLOW={risk_frac:.4f}, .env'dan)"
+        )
+
+        # ── F5-3: High-vol regime gate (backtest engine/regime.py'dan) ──
+        # Jonli botda ilgari faqat SelfLearner regime=="chop" da to'xtardi,
+        # "trend"/yuqori-vol da EMAS — 2025-Q2 halokati aynan shu rejimda
+        # bo'lgan. Bu gate M15 ATR% yuqori bo'lganda mo'rt reversion
+        # setuplarni (M15_OB/BB/CISD) bloklaydi. .env'dan sozlanadi
+        # (REGIME_ATR_THRESHOLD); 0.0 = o'chirilgan.
+        self.regime_gate = RegimeGate(
+            atr_threshold=self.config.regime_atr_threshold,
+            atr_period=self.config.regime_atr_period,
+        )
+        if self.regime_gate.enabled:
+            logger.info(
+                f"Regime gate ON: M15 ATR% > {self.config.regime_atr_threshold} "
+                f"→ blok {sorted(self.regime_gate.blocked_setups)}"
+            )
+        else:
+            logger.info("Regime gate OFF (REGIME_ATR_THRESHOLD=0)")
+        self._regime_atr_pct = 0.0
+
+        # ── F5-4: Setup-level block list (.env BLOCKED_SETUPS) ──
+        # Bu label'lar regime'dan qat'i nazar UMUMAN savdo qilinmaydi.
+        # Jonli .env'da "M15_OB" (past-WR, foydalanuvchi qarori 2026-06-20).
+        self.blocked_setups = self.config.get_blocked_setups()
+        if self.blocked_setups:
+            logger.info(f"Blocked setups (F5-4): {sorted(self.blocked_setups)}")
 
         # F1-4: Healthcheck shared state — main.py'da yaratiladi va beriladi.
         # None bo'lsa health endpoint o'chirilgan (back-compat).
@@ -672,6 +713,20 @@ class TraderAgent:
             await self._manage_positions()
             return
 
+        # ── F5-3: High-vol regime ATR% (gate uchun, M15 da bir marta) ──
+        # Yuqori-vol/trend rejimida mo'rt reversion setuplarni bloklash uchun.
+        # Gate o'chiq bo'lsa 0.0 (hech narsa bloklanmaydi).
+        regime_atr_pct = (
+            self.regime_gate.atr_pct(m15)
+            if self.regime_gate.enabled and m15 is not None else 0.0
+        )
+        self._regime_atr_pct = regime_atr_pct
+        if self.regime_gate.regime(regime_atr_pct) == "HIGH_VOL":
+            logger.info(
+                f"🌪 HIGH-VOL regime: M15 ATR% {regime_atr_pct:.3f} > "
+                f"{self.regime_gate.atr_threshold} — reversion setuplar bloklanadi"
+            )
+
         # ── Agent 2: Liquidity Hunter ─────────────────────────────
         hunt_result  = self.liq_hunter.hunt(ict_map, mid_price)
 
@@ -1017,7 +1072,7 @@ class TraderAgent:
                     open_positions=open_positions, mode=self._mode,
                     impulse_dir=impulse_dir, h1=h1,
                     d1_bias=d1_bias, h4_trend=h4_trend, h1_trend=h1_trend,
-                    w1_bias=w1_str,
+                    w1_bias=w1_str, regime_atr_pct=regime_atr_pct,
                 )
 
         # ── Manage open positions ─────────────────────────────────
@@ -1738,7 +1793,7 @@ class TraderAgent:
         ict_map: dict = None, silver_bullet: bool = False, open_positions: list = None,
         mode: str = "FLOW", impulse_dir: str = "none", h1=None,
         d1_bias: str = "N/A", h4_trend: str = "N/A", h1_trend: str = "N/A",
-        w1_bias: str = "N/A",
+        w1_bias: str = "N/A", regime_atr_pct: float = 0.0,
     ):
         # ── Mode-specific parametrlar ─────────────────────────────
         # TP3: impuls yo'nalishi mos bo'lsa 250 pip, aks holda max 150 pip
@@ -1818,6 +1873,22 @@ class TraderAgent:
         for zone in ordered_zones:
             if existing + placed_sets >= max_limit:
                 break
+
+            # F5-4: Setup-level block list — bu setuplar regime'dan qat'i
+            # nazar umuman savdo qilinmaydi (.env BLOCKED_SETUPS, masalan M15_OB).
+            if zone.get("label", "") in self.blocked_setups:
+                logger.info(f"⛔ Blocked setup (F5-4): {zone.get('label', '')} — skip")
+                continue
+
+            # F5-3: High-vol regime gate — yuqori M15 volatillikda mo'rt
+            # reversion setuplarni (M15_OB/BB/CISD) skip qiladi (2025-Q2 himoyasi).
+            # Gate o'chiq yoki normal-vol bo'lsa should_block() False qaytaradi.
+            if self.regime_gate.should_block(zone.get("label", ""), regime_atr_pct):
+                logger.info(
+                    f"🌪 Regime gate: {zone.get('label', '')} bloklandi "
+                    f"(M15 ATR% {regime_atr_pct:.3f} > {self.regime_gate.atr_threshold})"
+                )
+                continue
 
             entry = zone["entry"]
             sl    = zone["sl"]
@@ -2066,6 +2137,7 @@ class TraderAgent:
                         "entry": res.price, "direction": want_dir,
                         "tf": zone_tf_now, "be_done": False, "pnl": 0,
                         "mode": mode, "label": zone.get("label", "OB"),
+                        "lot": lot_each,   # F5-6: pozitsiya hajmini saqlash (CSV uchun)
                     }
                     save_trade_meta(self._trade_meta)  # F0-1
                     self.risk.record_trade_opened()
@@ -2273,6 +2345,8 @@ class TraderAgent:
                             "pnl":       0,
                             "mode":      meta.get("mode", "FLOW"),
                             "label":     meta.get("label", "OB"),
+                            # F5-6: haqiqiy to'ldirilgan hajmni saqlash (CSV uchun)
+                            "lot":       float(filled.get("volume", 0)),
                         }
                         save_trade_meta(self._trade_meta)  # F0-1
                         fill_price = float(filled.get("price_open", meta["entry"]))
@@ -2365,7 +2439,8 @@ class TraderAgent:
                 await tg.notify_order(
                     result_str, meta.get("direction","buy"), self.symbol,
                     meta.get("entry",0), meta.get("sl",0), meta.get("tp",0),
-                    0, meta.get("label","OB"), meta.get("mode","FLOW"), pnl,
+                    float(meta.get("lot", 0)), meta.get("label","OB"),  # F5-6: haqiqiy hajm
+                    meta.get("mode","FLOW"), pnl,
                 )
                 try:
                     tp_entry = meta.get("entry", entry_p)
@@ -2398,7 +2473,7 @@ class TraderAgent:
                         exit_price = exit_price,
                         sl         = meta.get("sl", 0),
                         tp1        = meta.get("tp1", 0) or meta.get("tp", 0),
-                        lot        = 0.0,
+                        lot        = float(meta.get("lot", 0.0)),   # F5-6: haqiqiy hajm (avval qattiq 0.0 edi)
                         pnl        = round(pnl, 2),
                         result     = result_str.lower(),
                         label      = meta.get("label", "OB"),

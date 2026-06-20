@@ -11,7 +11,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import apps.api.src.agents.trader.analysis.offline_validation as ov
 
@@ -151,3 +150,64 @@ class TestCLI:
         ns = ov._parse_args(["--start", "2024-01-01", "--end", "2026-01-01",
                              "--data-path", "d", "--skip-walk-forward"])
         assert ns.skip_walk_forward and not ns.skip_monte_carlo
+
+    def test_telegram_flag_defaults(self) -> None:
+        ns = ov._parse_args(["--start", "2024-01-01", "--end", "2026-01-01",
+                             "--data-path", "d"])
+        assert ns.telegram is False
+        assert ns.overfit_threshold == ov.OVERFIT_WARN_THRESHOLD
+
+
+# ── F4-2: monthly Telegram alert builder ────────────────────────────────────────
+
+def _report(overfit: float, verdict: str = "WARN") -> dict:
+    return {
+        "window": {"start": "2025-01-01T00:00:00+00:00", "end": "2026-01-01T00:00:00+00:00"},
+        "walk_forward": {
+            "verdict": verdict, "avg_overfit_score": overfit,
+            "oos_sharpe": 0.16, "oos_profit_factor": 1.17, "oos_max_dd_pct": 2.3,
+            "n_windows": 6, "oos_total_trades": 1500,
+        },
+        "monte_carlo": {"probability_of_ruin": 0.0, "worst_case_dd_pct": 2.34},
+        "risk_calibration": {"verdict": "OK", "recommended_risk_pct": 0.46},
+    }
+
+
+class TestValidationAlert:
+    def test_no_warning_when_overfit_below_threshold(self) -> None:
+        is_warn, text = ov.build_validation_alert(_report(0.30))
+        assert is_warn is False
+        assert "OK" in text
+        assert "✅" in text
+
+    def test_warns_when_overfit_above_threshold(self) -> None:
+        is_warn, text = ov.build_validation_alert(_report(0.75))
+        assert is_warn is True
+        assert "OGOHLANTIRISH" in text
+        assert "⚠️" in text
+
+    def test_warns_on_reject_even_if_overfit_low(self) -> None:
+        is_warn, _ = ov.build_validation_alert(_report(0.10, verdict="REJECT"))
+        assert is_warn is True
+
+    def test_threshold_is_strict(self) -> None:
+        # exactly at threshold → not a warning (uses >, not >=)
+        is_warn, _ = ov.build_validation_alert(_report(0.6))
+        assert is_warn is False
+
+    def test_custom_threshold(self) -> None:
+        is_warn, _ = ov.build_validation_alert(_report(0.45), overfit_threshold=0.4)
+        assert is_warn is True
+
+    def test_surfaces_mc_and_calib_sections(self) -> None:
+        _, text = ov.build_validation_alert(_report(0.30))
+        assert "p_ruin" in text
+        assert "Risk calib" in text
+
+    def test_handles_missing_sections(self) -> None:
+        # Only walk-forward present (MC + calib skipped) — must not crash.
+        rep = {"window": {"start": "2025-01-01", "end": "2026-01-01"},
+               "walk_forward": {"verdict": "WARN", "avg_overfit_score": 0.2}}
+        is_warn, text = ov.build_validation_alert(rep)
+        assert is_warn is False
+        assert "Walk-forward" in text
