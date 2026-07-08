@@ -255,6 +255,40 @@ def test_config_blocked_setups_parses_csv(clean_config_env):
     assert cfg.get_blocked_setups() == {"M15_OB", "H1_OB"}
 
 
+# T-02: EXECUTION_MODE hard safety switch. Back-compat: default 'demo' keeps the
+# live-account guard inert, so existing (demo/sim) behaviour is unchanged.
+
+def test_config_execution_mode_default_and_validation(clean_config_env):
+    # Default is 'demo' — the REAL-account connect/order guard only fires when
+    # explicitly opted into 'live', so default behaviour is byte-identical.
+    cfg = TradingConfig(_env_file=None)
+    assert cfg.execution_mode == "demo"
+
+    # Normalizing validator: case- and whitespace-insensitive.
+    assert TradingConfig(_env_file=None, execution_mode="LIVE").execution_mode == "live"
+    assert TradingConfig(_env_file=None, execution_mode=" Demo ").execution_mode == "demo"
+
+    # Only {"demo","live"} are accepted — any other value must abort startup.
+    with pytest.raises(ValidationError):
+        TradingConfig(_env_file=None, execution_mode="real")
+    with pytest.raises(ValidationError):
+        TradingConfig(_env_file=None, execution_mode="paper")
+
+
+# T-03: per-order lot hard cap. Default 0.0 = disabled (byte-identical back-compat:
+# no clamp applied in _place_zone_limits). >0 opts into lot_each = min(lot, cap).
+
+def test_config_max_lot_cap_defaults_off(clean_config_env):
+    # Default 0.0 = cap disabled → existing sizing behaviour unchanged.
+    cfg = TradingConfig(_env_file=None)
+    assert cfg.max_lot_cap == 0.0
+    # Explicit positive value is accepted (demo/real .env sets 0.05).
+    assert TradingConfig(_env_file=None, max_lot_cap=0.05).max_lot_cap == 0.05
+    # Field constraint: ge=0.0 → negative caps are rejected at startup.
+    with pytest.raises(ValidationError):
+        TradingConfig(_env_file=None, max_lot_cap=-1.0)
+
+
 # F5-6: trades.csv lot column must persist the real position size (was hardcoded 0.0).
 
 def test_log_trade_csv_persists_lot(tmp_path, monkeypatch):

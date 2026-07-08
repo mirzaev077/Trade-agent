@@ -2,7 +2,7 @@ import asyncio
 from loguru import logger
 
 from .core.clock import get_clock
-from .mt5_connector import MT5Connector
+from .mt5_connector import MT5Connector, MT5ConnectorError
 from .analysis import ICTAnalysis
 from .brain.ai_validator import TradingAIBrain
 from .brain.self_learner import SelfLearner
@@ -141,6 +141,18 @@ class TraderAgent:
         if self.blocked_setups:
             logger.info(f"Blocked setups (F5-4): {sorted(self.blocked_setups)}")
 
+        # ── Market-near-zone entry threshold (.env MARKET_NEAR_PIPS) ──
+        # Narx zona entry'siga shu pip-masofa ICHIDA bo'lsa → limit o'rniga
+        # darhol market kirish (_place_zone_limits'da). 0.0 = o'chiq (limit-only).
+        self.MARKET_NEAR_PIPS = self.config.market_near_pips
+        if self.MARKET_NEAR_PIPS > 0:
+            logger.info(
+                f"Market-near entry ON: narx zonaga ≤{self.MARKET_NEAR_PIPS:.1f} pip "
+                f"yaqin bo'lsa → MARKET (aks holda limit)"
+            )
+        else:
+            logger.info("Market-near entry OFF (MARKET_NEAR_PIPS=0) — faqat limit")
+
         # F1-4: Healthcheck shared state — main.py'da yaratiladi va beriladi.
         # None bo'lsa health endpoint o'chirilgan (back-compat).
         self.health_state = health_state
@@ -175,6 +187,9 @@ class TraderAgent:
         else:
             self._trade_meta: dict = {}
         self._mt5_recovery_attempted: bool = False  # connect() ichida ishlatamiz
+        # T-02: REAL account aniqlangach True bo'ladi (connect() da o'rnatiladi).
+        # Order-time guard shu flag'ni tekshiradi. Default False = demo/sim (back-compat).
+        self._account_is_real: bool = False
 
         # F0-2/F0-3: disconnect/recovery Telegram dedup flag'lari
         self._disconnect_notified: bool = False
@@ -238,6 +253,18 @@ class TraderAgent:
 
     def connect(self, login: int, password: str, server: str) -> dict:
         info = self.mt5.connect(login=login, password=password, server=server)
+        # ── T-02: EXECUTION_MODE hard safety guard ──────────────────
+        # mt5_connector.connect() "trade_mode" ni "Demo"/"Real" string
+        # qaytaradi (CONTEST ham "Real"). REAL account'da execution_mode
+        # 'live' bo'lmasa — ulanishni RAD et (savdo umuman boshlanmaydi).
+        self._account_is_real = (info.get("trade_mode") == "Real")
+        if self._account_is_real and self.config.execution_mode != "live":
+            raise MT5ConnectorError(
+                "REAL MT5 account aniqlandi, lekin EXECUTION_MODE='"
+                f"{self.config.execution_mode}' (!= 'live') — xavfsizlik uchun "
+                "ulanish/savdo RAD etildi. Haqiqiy pul bilan savdo qilish uchun "
+                ".env'da EXECUTION_MODE=live qo'ying."
+            )
         real = self.mt5.find_symbol(self.symbol)
         if real != self.symbol:
             self.symbol = real
@@ -1795,6 +1822,15 @@ class TraderAgent:
         d1_bias: str = "N/A", h4_trend: str = "N/A", h1_trend: str = "N/A",
         w1_bias: str = "N/A", regime_atr_pct: float = 0.0,
     ):
+        # ── T-02: order-time defense-in-depth guard ─────────────────
+        # REAL account + execution_mode != 'live' → hech qanday order
+        # joylashtirilmaydi (market/limit ikkalasi ham shu metoddan o'tadi).
+        if getattr(self, "_account_is_real", False) and self.config.execution_mode != "live":
+            logger.error(
+                "REAL account + EXECUTION_MODE != 'live' — order joylashtirish "
+                "o'tkazib yuborildi (T-02 guard)."
+            )
+            return
         # ── Mode-specific parametrlar ─────────────────────────────
         # TP3: impuls yo'nalishi mos bo'lsa 250 pip, aks holda max 150 pip
         has_impulse = (impulse_dir == want_dir)
@@ -1823,6 +1859,7 @@ class TraderAgent:
         vol_min  = sym_info.get("volume_min",       0.01)
         vol_max  = sym_info.get("volume_max",       500.0)
         vol_step = sym_info.get("volume_step",      0.01)
+        lot_cap  = self.config.max_lot_cap  # T-03: 0.0 = o'chiq (back-compat)
 
         # Shu yo'nalishda ochiq + pending orderlar soni
         open_dir_cnt = sum(
@@ -2020,6 +2057,8 @@ class TraderAgent:
             lot_each   = max(vol_min, total_lot)
             lot_each   = round(round(lot_each / vol_step) * vol_step, 2)
             lot_each   = min(lot_each, vol_max)
+            if lot_cap > 0:
+                lot_each = min(lot_each, lot_cap)  # T-03 clamp (sizing)
 
             # ── BE re-entry: lot 50% kamaytirish ─────────────────
             _be_cand = self._be_reentry_candidates.get(want_dir)
@@ -2028,6 +2067,8 @@ class TraderAgent:
                 _cand_age = (get_clock().now() - _be_cand["time"]).total_seconds()
                 if _cand_age < 7200:  # 2h ichida
                     lot_each = max(vol_min, round(round(lot_each * 0.5 / vol_step) * vol_step, 2))
+                    if lot_cap > 0:
+                        lot_each = min(lot_each, lot_cap)  # T-03 clamp (BE re-entry)
                     _is_be_reentry = True
                     logger.info(f"BE re-entry {want_dir.upper()}: lot 50% → {lot_each}")
                 else:
@@ -2038,8 +2079,15 @@ class TraderAgent:
             zone_hi  = zone.get("zone_hi", entry + sl_dist * 0.5)
             zone_tf_now = zone.get("tf", "H4")
 
-            # Barcha TF uchun limit order — market entry yo'q
-            do_market = False
+            # ── Market-near-zone: narx entry'ga yaqin bo'lsa darhol market ──
+            # Joriy narx zona entry'siga MARKET_NEAR_PIPS ichida (masalan 5 pip)
+            # bo'lsa — limit kutmaymiz, darhol market bilan kiramiz (limit fill'ni
+            # o'tkazib yubormaslik uchun). MARKET_NEAR_PIPS=0 → doim limit (eski xulq).
+            do_market = (
+                self.MARKET_NEAR_PIPS > 0
+                and current_price > 0
+                and abs(current_price - entry) <= self.MARKET_NEAR_PIPS * self.PIP
+            )
 
             # ── SL adjustment closure (needed by AI block + market/limit paths) ──
             def _adj_sl(e):
@@ -2104,6 +2152,8 @@ class TraderAgent:
                             m = float(adj["lot_size_multiplier"])
                             m = max(0.8, min(m, 1.2))
                             lot_each = max(vol_min, round(round(lot_each * m / vol_step) * vol_step, 2))
+                            if lot_cap > 0:
+                                lot_each = min(lot_each, lot_cap)  # T-03 clamp (post-AI — LAST transform)
                     else:
                         logger.warning(
                             f"AI ✗ REJECTED {zone['label']}: {ai_dec.reasoning[:100]}"
@@ -2149,6 +2199,10 @@ class TraderAgent:
                         f"  Entry: {mkt_e:.2f}  SL: {mkt_sl:.2f} ({mkt_sl_p:.0f}p)  TP: {mkt_tp:.2f} ({sign}{mkt_tp_p:.0f}p)\n"
                         f"  Lot: {lot_each}  Risk: ${risk_amt_z:.2f}  {ai_note}\n"
                         f"{'═'*60}"
+                    )
+                    await tg.notify_order(
+                        "MARKET", want_dir, self.symbol,
+                        mkt_e, mkt_sl, mkt_tp, lot_each, zone.get("label", "OB"), mode,
                     )
                 except Exception as e:
                     logger.error(f"Market order failed: {e}")
@@ -2460,6 +2514,20 @@ class TraderAgent:
                     )
                 except Exception as _le:
                     logger.warning(f"SelfLearner log_trade error: {_le}")
+
+                # ── T-01: feed daily-loss/profit breaker (agent.py:_tick) ──
+                # Shusiz self.risk._today_trades bo'sh qoladi va kunlik-zarar
+                # darvozasi (agent.py:639) HECH QACHON ishlamaydi. WIN+LOSS+BE
+                # hammasi yoziladi (kunlik profit-target ham musbat pnl o'qiydi).
+                # add_closed_trade close_time.date()==today ni o'zi filtrlaydi;
+                # get_clock() backtest virtual soatiga mos. Bir close = bir chaqiruv
+                # (del self._trade_meta[ticket] pastda takror aniqlashni to'sadi).
+                try:
+                    self.risk.add_closed_trade(
+                        {"pnl": round(pnl, 2), "close_time": get_clock().now()}
+                    )
+                except Exception as _re:
+                    logger.warning(f"add_closed_trade error: {_re}")
 
                 # CSV export
                 try:

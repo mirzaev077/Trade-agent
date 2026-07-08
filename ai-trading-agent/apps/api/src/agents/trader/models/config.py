@@ -16,7 +16,7 @@ Pydantic v2 BaseSettings env vars'ni avtomatik field nomi bo'yicha
 `extra='ignore'` — `.env`'dagi yot o'zgaruvchilarni (OPENCLAW_STATE_DIR,
 AUTO_APPLY_LEARNING va h.k.) qabul qilmasdan jim o'tkazib yuborish.
 """
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from dotenv import load_dotenv
 
@@ -78,6 +78,12 @@ class TradingConfig(BaseSettings):
     mt5_password: str = Field("")
     mt5_server:   str = Field("Exness-MT5Real34", min_length=1)
 
+    # ── T-02: EXECUTION_MODE hard safety switch ('demo'|'live') ──
+    # Default 'demo' = mavjud xulq. REAL MT5 account (trade_mode==Real)
+    # bilan ulanishda execution_mode 'live' bo'lmasa connect()/order RAD
+    # etiladi (agent.py guard). Demo/sim account'da guard inert (back-compat).
+    execution_mode: str = Field("demo")
+
     # ── Trading ──
     symbol:        str = Field("XAUUSD", min_length=3)
     scan_interval: int = Field(30, ge=1, le=600)
@@ -105,6 +111,21 @@ class TradingConfig(BaseSettings):
     # "M15_OB" (past-WR setup, foydalanuvchi qarori 2026-06-20).
     blocked_setups: str = Field("")
 
+    # ── T-03: per-order lot hard cap. 0.0 = o'chiq (back-compat).
+    # >0 bo'lsa sizing + BE re-entry + AI multiplier'dan KEYIN
+    # lot_each = min(lot_each, max_lot_cap) (agent.py _place_zone_limits).
+    # Eslatma: cap vol_min (0.01) dan past bo'lmasin (broker reject).
+    max_lot_cap: float = Field(0.0, ge=0.0, le=500.0)
+
+    # ── Market-near-zone entry (limit o'rniga darhol market) ──
+    # Joriy narx zona entry'siga shu pip-masofa ICHIDA bo'lsa, bot pending
+    # limit qo'yish o'rniga DARHOL market bilan kiradi (narx zonaga deyarli
+    # yetgan — kutishga hojat yo'q, limit fill'ni o'tkazib yubormaslik uchun).
+    # 0.0 = o'chiq (faqat limit, eski xulq). Jonli tavsiya: 5.0 pip (XAUUSD:
+    # 5 pip = $0.50 erta kirish). Katta qiymat = ko'proq market, kamroq
+    # limit — RR biroz yomonlashadi, fill ehtimoli oshadi.
+    market_near_pips: float = Field(5.0, ge=0.0, le=50.0)
+
     # ── AI Brain ──
     claude_api_key:    str   = Field("")
     min_ai_confidence: float = Field(0.70, ge=0.0, le=1.0)    # F1-2 fix: avval env binding yo'q edi
@@ -117,6 +138,17 @@ class TradingConfig(BaseSettings):
     database_url: str = Field("")
     redis_url:    str = Field("redis://localhost:6379")
     socket_url:   str = Field("http://localhost:8000")
+
+    @field_validator("execution_mode", mode="before")
+    @classmethod
+    def _normalize_execution_mode(cls, v):
+        # Case/space-insensitive: 'Demo', ' LIVE ' → 'demo'/'live'.
+        s = str(v).strip().lower()
+        if s not in {"demo", "live"}:
+            raise ValueError(
+                f"execution_mode must be 'demo' or 'live' (got {v!r})"
+            )
+        return s
 
     @model_validator(mode="after")
     def _check_invariants(self) -> "TradingConfig":

@@ -14,3 +14,6 @@ timestamp,direction,symbol,entry,exit,sl,tp1,lot,pnl,result,label,tf,mode,sessio
 2026-05-06 15:14:07,buy,XAUUSD,4697.54,0.0,4693.54,4708.48,0.0,-4.0,loss,M15_OB,M15,FLOW,overlap,trend,40.0,109.4,2.74
 2026-05-06 16:01:47,buy,XAUUSD,4689.42,0.0,4684.42,4694.64,0.0,-5.0,loss,H4_RB,H4,FLOW,newyork,chop,50.0,75.0,1.5
 2026-05-07 05:23:38,buy,XAUUSD,4689.42,4699.42,4684.42,4694.64,0.0,30.0,win,H4_RB,H4,FLOW,asia,chop,50.0,100.0,2.0
+2026-06-09 12:36:33,buy,XAUUSDm,4692.25,0.0,4687.56,4696.25,0.0,-4.69,loss,M15_OB,M15,FLOW,london,range,46.9,94.0,2.0
+2026-06-18 09:45:32,sell,XAUUSDm,4268.45,4269.29,4273.29,4263.67,0.0,-5.04,loss,M5_OB,M5,FLOW,london,trend,48.4,97.0,2.0
+2026-06-18 10:23:03,sell,XAUUSDm,4272.71,4264.71,4276.71,4267.99,0.0,58.86,win,M5_OB,M5,FLOW,london,trend,40.0,80.0,2.0

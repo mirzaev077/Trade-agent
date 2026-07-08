@@ -14,6 +14,51 @@
       "pnl": 30.0,
       "mode": "FLOW",
       "regime": "chop"
+    },
+    {
+      "ts": "2026-06-09T12:36:33.052540+00:00",
+      "entry_type": "OB",
+      "tf": "M15",
+      "session": "london",
+      "day": "tuesday",
+      "session_day_key": "london_tuesday",
+      "direction": "buy",
+      "sl_pips": 46.9,
+      "tp_pips": 94.0,
+      "result": "loss",
+      "pnl": -4.69,
+      "mode": "FLOW",
+      "regime": "range"
+    },
+    {
+      "ts": "2026-06-18T09:45:32.515869+00:00",
+      "entry_type": "OB",
+      "tf": "M5",
+      "session": "london",
+      "day": "thursday",
+      "session_day_key": "london_thursday",
+      "direction": "sell",
+      "sl_pips": 48.4,
+      "tp_pips": 97.0,
+      "result": "loss",
+      "pnl": -5.04,
+      "mode": "FLOW",
+      "regime": "trend"
+    },
+    {
+      "ts": "2026-06-18T10:23:03.027460+00:00",
+      "entry_type": "OB",
+      "tf": "M5",
+      "session": "london",
+      "day": "thursday",
+      "session_day_key": "london_thursday",
+      "direction": "sell",
+      "sl_pips": 40.0,
+      "tp_pips": 80.0,
+      "result": "win",
+      "pnl": 58.86,
+      "mode": "FLOW",
+      "regime": "trend"
     }
   ],
   "adapted": {
@@ -43,7 +88,7 @@
     "session_weights": {}
   },
   "stats": {
-    "total": 1,
+    "total": 4,
     "last_analysis_at": 0,
     "last_evolution_at": 0
   },
@@ -51,6 +96,14 @@
     "asia_thursday": {
       "wins": 1,
       "losses": 0
+    },
+    "london_tuesday": {
+      "wins": 0,
+      "losses": 1
+    },
+    "london_thursday": {
+      "wins": 1,
+      "losses": 1
     }
   }
 }

@@ -236,7 +236,8 @@ def build_validation_alert(
     if calib:
         lines.append(
             f"Risk calib: {calib.get('verdict', 'N/A')}  "
-            f"tavsiya risk={float(calib.get('recommended_risk_pct', 0.0)):.2f}%"
+            f"tavsiya risk={float(calib.get('recommended_risk_pct', 0.0)):.2f}%  "
+            f"proj worst-DD={float(calib.get('projected_worst_dd_pct', 0.0)):.1f}%"
         )
 
     return is_warning, "\n".join(lines)
