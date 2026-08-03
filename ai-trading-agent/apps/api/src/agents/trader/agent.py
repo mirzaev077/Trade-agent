@@ -347,6 +347,37 @@ class TraderAgent:
         except Exception as e:  # noqa: BLE001 — health update hech qachon tick'ni buzmaydi
             logger.debug(f"[healthcheck] update error: {e}")
 
+    # ── A2: pip → pul konvertatsiyasi (hajmni HISOBGA OLADI) ──────
+
+    # XAUUSD: 1.00 lot = 100 unsiya → $1 narx harakati = $100.
+    # 1 pip = 0.10 → 1 pip × 1.00 lot = $10. Symbol info bo'lmasa shu ishlatiladi.
+    _FALLBACK_MONEY_PER_PIP_PER_LOT = 10.0
+
+    def _money_per_pips(self, pips: float, lot: float) -> float:
+        """`pips` masofa `lot` hajmda necha dollar turishini qaytaradi (musbat).
+
+        Avval broker metrikalari (point + trade_tick_value) — `RiskManagement.
+        calculate_position_size` bilan bir xil formula, shuning uchun sizing va
+        PnL taxmini bir-biriga mos. Symbol info yo'q/nosoz bo'lsa XAUUSD
+        konstantasiga qaytadi.
+
+        A2: avval bu hisob umuman yo'q edi — `pnl = -sl_pips * 0.1` qattiq
+        yozilgan va faqat 0.01 lot uchun to'g'ri edi.
+        """
+        pips = abs(float(pips or 0.0))
+        lot  = abs(float(lot or 0.0))
+        if pips <= 0 or lot <= 0:
+            return 0.0
+        try:
+            info  = self.mt5.get_symbol_info(self.symbol) or {}
+            point = float(info.get("point", 0) or 0)
+            tickv = float(info.get("trade_tick_value", 0) or 0)
+            if point > 0 and tickv > 0:
+                return (pips * self.PIP / point) * tickv * lot
+        except Exception as e:  # noqa: BLE001 — taxmin hech qachon tick'ni buzmasin
+            logger.debug(f"_money_per_pips: symbol info error — {e}")
+        return pips * self._FALLBACK_MONEY_PER_PIP_PER_LOT * lot
+
     # ── F4 scheduler: daily / weekly reports ──────────────────────
 
     async def _maybe_send_scheduled_reports(self) -> None:
@@ -2447,18 +2478,38 @@ class TraderAgent:
                     if _attempt < 2:
                         await asyncio.sleep(1)
                 # Fallback ONLY when history is completely unavailable (not when profit==0)
+                #
+                # A2 BUG (2026-08-01): avvalgi formula `pnl = -sl_pips * 0.1`
+                # HAJMNI (lot) umuman hisobga olmagan — u faqat 0.01 lot uchun
+                # to'g'ri edi ($0.1/pip). trades.csv 2026-07-08 14:46 qatori:
+                # lot=0.25, 43 pip → yozilgani -$4.30, HAQIQIYSI ≈ -$107.50
+                # (25 barobar kam!). Bunday qator PF, Monte-Carlo va
+                # risk_calibration hisoblarini buzadi.
                 if not _history_found and entry_p > 0:
                     direction_closed = meta.get("direction", "buy")
                     sl_price = meta.get("sl", 0)
-                    tp1_price = meta.get("tp1", 0) or meta.get("tp", 0)
                     if sl_price > 0:
-                        # Determine whether SL or TP was more likely hit
-                        # by checking which is closer to current known last price
                         _sl_pips = abs(meta.get("sl_pips", 0))
-                        if direction_closed == "buy" and sl_price < entry_p:
-                            pnl = -_sl_pips * 0.1   # SL hit ≈ -$0.1/pip
-                        elif direction_closed == "sell" and sl_price > entry_p:
-                            pnl = -_sl_pips * 0.1
+                        if _sl_pips <= 0:                     # recovered meta — sl_pips yo'q
+                            _sl_pips = abs(entry_p - sl_price) / self.PIP
+                        _sl_hit = (
+                            (direction_closed == "buy"  and sl_price < entry_p) or
+                            (direction_closed == "sell" and sl_price > entry_p)
+                        )
+                        if _sl_hit:
+                            pnl = -self._money_per_pips(
+                                _sl_pips, float(meta.get("lot", 0.0) or 0.0)
+                            )
+                            # Chiqish narxi noma'lum, lekin taxmin AYNAN SL'ga
+                            # tayanadi — shuning uchun exit sifatida SL yoziladi
+                            # (avval 0.0 yozilardi va bu haqiqiy narx sifatida
+                            # CSV'ga tushib, performance/risk hisoblarini buzardi).
+                            exit_price = float(sl_price)
+                            logger.warning(
+                                f"#{ticket} MT5 history topilmadi — PnL SL bo'yicha "
+                                f"taxmin qilindi: {_sl_pips:.1f} pip × "
+                                f"{float(meta.get('lot', 0.0) or 0.0):.2f} lot = ${pnl:.2f}"
+                            )
                 closed_dir = meta.get("direction", "buy")
                 if pnl > 0:
                     self._wins    += 1

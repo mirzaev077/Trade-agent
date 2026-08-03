@@ -542,19 +542,48 @@ class MT5Connector:
         deals = mt5.history_deals_get(date_from, date_to)
         if deals is None:
             return None
-        # Position ID = opening ticket. Closing deals (entry==DEAL_ENTRY_OUT or DEAL_ENTRY_INOUT)
-        total_profit = 0.0
-        close_price  = 0.0
+        # Position ID = opening ticket. Bitta pozitsiyada bir nechta deal bo'ladi:
+        #   entry == DEAL_ENTRY_IN    (0) → OCHILISH  (price = kirish narxi)
+        #   entry == DEAL_ENTRY_OUT   (1) → YOPILISH  (price = chiqish narxi)
+        #   entry == DEAL_ENTRY_INOUT (2) → reverse (ham yopadi, ham ochadi)
+        #   entry == DEAL_ENTRY_OUT_BY(3) → close-by
+        #
+        # A2 BUG (2026-08-01): avval `if deal.price > 0: close_price = deal.price`
+        # deb YOZILGAN edi — OCHILISH deali ham price > 0 bo'lgani uchun,
+        # deal tartibiga qarab kirish narxi chiqish narxi sifatida yozilardi.
+        # trades.csv 2026-07-08 17:22 qatorida aynan shu ko'rinadi:
+        # entry == exit == 4069.99, lekin pnl +4.91 (ya'ni narx aslida siljigan).
+        # Endi faqat YOPUVCHI deal'lar hisobga olinadi va qisman yopilishlarda
+        # hajm bo'yicha o'rtacha narx olinadi.
+        _OUT_KINDS = {
+            getattr(mt5, "DEAL_ENTRY_OUT", 1),
+            getattr(mt5, "DEAL_ENTRY_INOUT", 2),
+            getattr(mt5, "DEAL_ENTRY_OUT_BY", 3),
+        }
+        total_profit  = 0.0
+        close_px_vol  = 0.0   # Σ(price × volume) — faqat yopuvchi deal'lar
+        close_vol     = 0.0   # Σ(volume)
         found = False
         for deal in deals:
-            if deal.position_id == ticket:
-                total_profit += deal.profit + deal.swap + deal.commission
-                # Closing deal has non-zero price
-                if deal.price > 0:
-                    close_price = deal.price
-                found = True
+            if deal.position_id != ticket:
+                continue
+            found = True
+            total_profit += deal.profit + deal.swap + deal.commission
+            if getattr(deal, "entry", None) not in _OUT_KINDS:
+                continue                     # ochilish deali — narxi chiqish EMAS
+            price = float(getattr(deal, "price", 0.0) or 0.0)
+            if price <= 0:
+                continue
+            vol = float(getattr(deal, "volume", 0.0) or 0.0)
+            if vol <= 0:
+                vol = 1.0                    # hajm noma'lum → teng vaznli
+            close_px_vol += price * vol
+            close_vol    += vol
         if not found:
             return None
+        # Yopuvchi deal topilmasa 0.0 qaytadi — chaqiruvchi (agent.py) buni
+        # "chiqish narxi noma'lum" deb tushunadi va soxta narx yozmaydi.
+        close_price = round(close_px_vol / close_vol, 5) if close_vol > 0 else 0.0
         return {"profit": round(total_profit, 2), "price_close": close_price}
 
     def get_account_history(self, days: int = 1) -> list:

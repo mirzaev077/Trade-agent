@@ -297,7 +297,9 @@ def test_log_trade_csv_persists_lot(tmp_path, monkeypatch):
     from apps.api.src.agents.trader.utils import trade_analytics as ta
 
     csv_path = tmp_path / "trades.csv"
-    monkeypatch.setattr(ta, "_CSV_PATH", str(csv_path))
+    # A2: yo'l endi `OPENCLAW_TRADES_CSV` orqali override qilinadi
+    # (`ta.get_csv_path()`), shunda hech qanday test jonli jurnalga yozmaydi.
+    monkeypatch.setenv("OPENCLAW_TRADES_CSV", str(csv_path))
     ta.log_trade_csv(
         direction="buy", symbol="XAUUSD", entry=2000.0, exit_price=2010.0,
         sl=1995.0, tp1=2010.0, lot=0.05, pnl=5.0, result="win",

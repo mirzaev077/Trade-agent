@@ -15,6 +15,17 @@ _CSV_FIELDS = [
 ]
 
 
+def get_csv_path() -> str:
+    """Savdo jurnali yo'li. `OPENCLAW_TRADES_CSV` env uni override qiladi.
+
+    A2 himoyasi (2026-08-01): yo'l qattiq yozilgani uchun har qanday test yoki
+    ad-hoc skript jonli `brain/trades.csv` ga yozib yuborishi mumkin edi.
+    `OPENCLAW_STATE_DIR` (db.py, persistence.py) bilan bir xil konvensiya —
+    env CHAQIRUV paytida o'qiladi, shuning uchun `monkeypatch.setenv` ishlaydi.
+    """
+    return os.path.abspath(os.getenv("OPENCLAW_TRADES_CSV") or _CSV_PATH)
+
+
 def log_trade_csv(
     direction: str, symbol: str, entry: float, exit_price: float,
     sl: float, tp1: float, lot: float, pnl: float, result: str,
@@ -33,7 +44,7 @@ def log_trade_csv(
         "sl_pips": round(sl_pips, 1), "tp_pips": round(tp_pips, 1), "rr": rr,
     }
     try:
-        path = os.path.abspath(_CSV_PATH)
+        path = get_csv_path()
         write_header = not os.path.exists(path)
         with open(path, "a", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=_CSV_FIELDS)

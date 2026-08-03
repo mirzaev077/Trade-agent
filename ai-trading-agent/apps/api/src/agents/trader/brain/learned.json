@@ -59,6 +59,96 @@
       "pnl": 58.86,
       "mode": "FLOW",
       "regime": "trend"
+    },
+    {
+      "ts": "2026-07-08T14:46:28.355948+00:00",
+      "entry_type": "OB",
+      "tf": "H1",
+      "session": "overlap",
+      "day": "wednesday",
+      "session_day_key": "overlap_wednesday",
+      "direction": "buy",
+      "sl_pips": 43.0,
+      "tp_pips": 86.0,
+      "result": "loss",
+      "pnl": -4.3,
+      "mode": "FLOW",
+      "regime": "range"
+    },
+    {
+      "ts": "2026-07-08T16:40:20.364656+00:00",
+      "entry_type": "OB",
+      "tf": "H4",
+      "session": "newyork",
+      "day": "wednesday",
+      "session_day_key": "newyork_wednesday",
+      "direction": "sell",
+      "sl_pips": 46.9,
+      "tp_pips": 195.1,
+      "result": "loss",
+      "pnl": -6.76,
+      "mode": "FLOW",
+      "regime": "range"
+    },
+    {
+      "ts": "2026-07-08T16:43:23.427045+00:00",
+      "entry_type": "BEAR",
+      "tf": "M15",
+      "session": "newyork",
+      "day": "wednesday",
+      "session_day_key": "newyork_wednesday",
+      "direction": "sell",
+      "sl_pips": 50.0,
+      "tp_pips": 100.0,
+      "result": "loss",
+      "pnl": -12.0,
+      "mode": "FLOW",
+      "regime": "range"
+    },
+    {
+      "ts": "2026-07-08T16:55:34.986234+00:00",
+      "entry_type": "RB",
+      "tf": "H4",
+      "session": "newyork",
+      "day": "wednesday",
+      "session_day_key": "newyork_wednesday",
+      "direction": "sell",
+      "sl_pips": 47.3,
+      "tp_pips": 95.0,
+      "result": "loss",
+      "pnl": -18.92,
+      "mode": "FLOW",
+      "regime": "range"
+    },
+    {
+      "ts": "2026-07-08T17:22:27.406810+00:00",
+      "entry_type": "OB",
+      "tf": "M5",
+      "session": "newyork",
+      "day": "wednesday",
+      "session_day_key": "newyork_wednesday",
+      "direction": "sell",
+      "sl_pips": 40.0,
+      "tp_pips": 80.0,
+      "result": "win",
+      "pnl": 4.91,
+      "mode": "FLOW",
+      "regime": "range"
+    },
+    {
+      "ts": "2026-07-08T17:31:10.741493+00:00",
+      "entry_type": "OB",
+      "tf": "D1",
+      "session": "newyork",
+      "day": "wednesday",
+      "session_day_key": "newyork_wednesday",
+      "direction": "sell",
+      "sl_pips": 50.0,
+      "tp_pips": 100.0,
+      "result": "loss",
+      "pnl": -20.0,
+      "mode": "FLOW",
+      "regime": "range"
     }
   ],
   "adapted": {
@@ -88,7 +178,7 @@
     "session_weights": {}
   },
   "stats": {
-    "total": 4,
+    "total": 10,
     "last_analysis_at": 0,
     "last_evolution_at": 0
   },
@@ -104,6 +194,14 @@
     "london_thursday": {
       "wins": 1,
       "losses": 1
+    },
+    "overlap_wednesday": {
+      "wins": 0,
+      "losses": 1
+    },
+    "newyork_wednesday": {
+      "wins": 1,
+      "losses": 4
     }
   }
 }

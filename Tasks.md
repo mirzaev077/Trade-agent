@@ -37,10 +37,10 @@
 - ~~**F2-3.1 ICTAnalyst limit-order fix**~~ → **2026-06-20 YAKUNLANDI.** Variant B+C port qilindi; 24-oy v5rr acceptance TUGADI: **3015 savdo, net +$644.23, 7 WARN / 1 REJECT** (q2_2025). Formal validation (2026-06-09): robust+safe, low-edge, demo-ready. Batafsil: F2-3.1 bo'limi quyida.
 
 ### 🟡 Live'ga halaqit qilmaydi, lekin operatsion xavfli
-- Healthcheck endpoint yo'q
-- `.env.example` da `TELEGRAM_*`, `CLAUDE_API_KEY` yo'q
-- Heartbeat / watchdog yo'q
-- 36 ta `datetime.utcnow()` chaqiruvi (testability + look-ahead)
+- ~~Healthcheck endpoint yo'q~~ → F1-4 (`health.py`, port 8080)
+- ~~`.env.example` da `TELEGRAM_*`, `CLAUDE_API_KEY` yo'q~~ → F1-3 (19 key)
+- ~~Heartbeat / watchdog yo'q~~ → **2026-08-01: `OpenClaw-Heartbeat` Task Scheduler vazifasi, har 30 daq (F3-3)**
+- ~~36 ta `datetime.utcnow()` chaqiruvi~~ → F2-1 (40 ta migratsiya + DTZ ruff)
 
 ---
 
@@ -219,9 +219,9 @@ Quyidagi muammolar hal qilindi:
 ### F3-3: Live monitoring 🔵
 - [x] Telegram bot'ga `/status`, `/positions`, `/pause`, `/resume` commandlari qo'shish *(2026-05-23: `telegram_bot.py` ga inbound polling + command registry + auth; yangi `telegram_commands.py` 4 ta handler; `tests/unit/test_telegram_commands.py` 19 test pass)*
 - [x] **main.py wire-up** *(2026-05-30: `telegram_commands.wire_up(agent)` helper — register_all + start_polling birga; idempotent (start_polling internal dedup); TELEGRAM_BOT_TOKEN yo'q bo'lsa graceful no-op (`_ENABLED=False` tekshiruv); main.py `_run_agent()` ga ulandi, finally'da stop_polling; +5 test (registers 4 cmd, skip polling when disabled, start when enabled, idempotent across reloads, custom bot_module injection); 396/396 pytest pass)*
-- [ ] Watchdog ishga tushirilgan bo'lsin (`scripts/watchdog.ps1`)
+- [x] **Watchdog ishga tushirilgan bo'lsin** *(2026-08-01: `scripts/watchdog.ps1` cheksiz loop bo'lgani uchun konsol yopilishi/reboot/o'z crash'i bilan o'lardi — bot 24 kun o'chiq turgani hech kimga bildirilmagani shuni ko'rsatdi. Yechim: **bir martalik** `scripts/heartbeat_check.ps1` + Windows Task Scheduler. Har chaqiruv mustaqil, cross-run xotira `apps/data/state/heartbeat.json` da. Tekshiradi: (1) `/health/live` endpoint; (2) `trades.csv` oxirgi savdo yoshi (F5-5 kuzatuvi konteksti alert ichida ko'rinadi). Anti-spam: birinchi tushishda 1 alert, keyin `-RemindAfterHours` (default 12) da 1 eslatma; tiklanganda recovery xabari; sog'lom bo'lsa MUTLAQO jim. Exit 0=alive / 1=down. `scripts/register_heartbeat.ps1` — `-Status` / `-Unregister` bilan; admin huquqi shart emas. **Ro'yxatdan o'tkazildi: `OpenClaw-Heartbeat`, har 30 daq.** 4 yo'l ham qo'lda tasdiqlandi (birinchi aniqlash / anti-spam jim / recovery / sog'lom-jim) + vazifa majburiy ishga tushirilib real Telegram alert yetib bordi. Eslatma: `.ps1` fayllar UTF-8 **BOM bilan** saqlandi — PowerShell 5.1 BOM'siz faylni ANSI deb o'qib emojini buzadi.)*
 - [x] **Daily summary generator** *(2026-05-30: `analysis/daily_summary.py` (~190 satr) — `DailySummaryConfig`/`DailySummaryResult`, UTC day window (half-open 00:00→24:00), reuses weekly_report CSV+filter+equity infra, PnL/WR/PF/intraday DD/best-setup, BE trades shown separately from L; CLI `python -m apps.api.src.agents.trader.analysis.daily_summary --balance X [--date YYYY-MM-DD]`; 14 test pass; 410/410 total)*
-- [ ] **Scheduler wire-up:** 23:00 UTC'da daily_summary.generate() + telegram_bot.send — F4 scheduler fazasida
+- [x] **Scheduler wire-up:** 23:00 UTC'da daily_summary.generate() + telegram_bot.send *(ALLAQACHON BAJARILGAN — 2026-08-01 da tekshirildi. `agent.py:383 _maybe_send_scheduled_reports()` `_tick` ichidan (`agent.py:463`) weekend-guard'dan OLDIN chaqiriladi. Toza predikatlar: `_daily_report_due(now, last_day_iso)` — Du–Ju, 23:00 dan, kuniga 1 marta; Sha/Ya o'tkazib yuboriladi. Xatolik hech qachon tick'ni buzmaydi (try/except). Testlar: `tests/unit/test_scheduled_reports.py`.)*
 
 ### Faza 3 Acceptance
 - [ ] 7 kun real'da uzluksiz ishlaydi
@@ -238,7 +238,7 @@ Quyidagi muammolar hal qilindi:
 - [x] `analysis/weekly_report.py` (yangi, ~380 satr): `WeeklyReportConfig`, `WeeklyReportResult`, CSV → performance.compute schema mapping (entry→entry_price, exit→exit_price, label→setup_type), running-balance equity curve, session breakdown, `generate()` saves `reports/weekly_<date>.html` + compact HTML Telegram text (Wilson CI, PF, Sharpe, Max DD, best/worst session, best setup) *(2026-05-30; reuses `analysis/performance.compute` + `analysis/report_html.render`; performance.py:Sharpe nan-guard for small windows; CLI `python -m apps.api.src.agents.trader.analysis.weekly_report --balance X [--end YYYY-MM-DD] [--days 7]`)*
 - [x] CLI smoke against live `brain/trades.csv` (1 trade window) — HTML 4.7 KB written, Telegram text formatted, verdict propagates
 - [x] **Test:** `tests/unit/test_weekly_report.py` — 28 test (config validation, CSV load, normalization, window filter half-open, equity curve drawdown, session breakdown, Telegram zero-trade + populated, generate() integration writes HTML, CLI happy path + invalid date + print-telegram). **391/391 pytest pass (363 + 28 new), 0 regression.**
-- [ ] **Scheduler wire-up:** Har juma 23:00 UTC `generate()` + `telegram_bot.send(result.telegram_text, parse_mode='HTML')` — F4 deployment fazasida (live MT5 paytida)
+- [x] **Scheduler wire-up:** Har juma 23:00 UTC `generate()` + `telegram_bot.send(...)` *(ALLAQACHON BAJARILGAN — 2026-08-01 da tekshirildi. `_weekly_report_due(now, last_week)` — juma (weekday 4), 23:00 dan, ISO-hafta boshiga 1 marta; HTML `reports/weekly/` ga yoziladi. Xuddi daily kabi `_maybe_send_scheduled_reports()` ichida, guarded.)*
 
 ### F4-2: Walk-forward (oylik) 🟢
 > **TMAS pattern:** `WalkForwardValidator` — bu yerda **bir marta oyiga** ishlatiladi
@@ -278,9 +278,11 @@ Quyidagi muammolar hal qilindi:
 - [x] Qiymatni **2%** ga o'rnatish (hozirgi 3% dan PASAYTIRADI — xavfsizroq). *(`.env` `RISK_PER_TRADE=1.0→2.0`; invariant `DAILY_MAX_RISK=5.0 >= 2.0` OK)*
 - [x] **Tekshirish:** sizing 2% berishini bitta savdoda tasdiqlash (`Risk: 2.0%` log'da). *(startup log: `Risk per trade: 2.00% (SNIPER=FLOW=0.0200, .env'dan)`; instance RISK_SNIPER/FLOW/PCT=0.02 tasdiqlandi; smoke 24/24 pass)*
 
-### F5-2: Kunlik xavf chegarasini qayta ko'rish 🟠
-- [ ] Hozir `.env` `DAILY_MAX_RISK=5.0`. 2%/savdo da bu ~2.5 to'liq zararga teng.
-- [ ] Qaror: 4% atrofida (≈2 zararli savdodan keyin "faqat boshqarish" rejimi).
+### F5-2: Kunlik xavf chegarasini qayta ko'rish ✅ — 2026-08-01 BAJARILDI
+- [x] Hozir `.env` `DAILY_MAX_RISK=5.0`. 2%/savdo da bu ~2.5 to'liq zararga teng.
+- [x] Qaror: 4% atrofida (≈2 zararli savdodan keyin "faqat boshqarish" rejimi). *(2026-08-01: `.env DAILY_MAX_RISK=5.0→4.0` + izoh. Endi chegara ANIQ 2 ta to'liq zarar (2×2.0%=4.0%), avval 2.5 ta edi. Invariantlar buzilmadi: 4.0 >= RISK_PER_TRADE(2.0), MAX_DRAWDOWN(10.0 default) >= 4.0. Kod o'zgarmadi — `agent.py:666` (`daily_loss_pct >= self.config.daily_max_risk` → manage only) va `risk/manager.py:72` (`daily_risk_used < cfg.daily_max_risk`) allaqachon config'dan o'qiydi.)*
+- [x] **Test:** `tests/unit/test_f5_2_daily_risk.py` — 10 test, 3 daraja: (1) jonli `.env` qiymatlari 4.0/2.0 + ratio aniq 2.0; (2) cross-field invariantlar + ValidationError (daily<risk, dd<daily); (3) HAQIQIY xulq `RiskManagement.check_trade_allowed` bilan — 1-zarardan keyin `daily_limit=True`, 2-dan keyin `False`; eski 5.0% da 2 zarardan keyin hali OCHIQ bo'lishi (regression kontrasti, tavtologiya emas); qisman zararlar + yutuqlar netlanmasligi. Plus F5-1 sinfidagi bugga qarshi source-guard (`agent.py` qattiq yozilgan chegara ishlatmasin). **551/551 pytest pass (541+10, 0 regression), ruff 0.**
+- **Eslatma:** `.env.example` da `DAILY_MAX_RISK=5.0` QOLDIRILDI — u boshqa profil (`RISK_PER_TRADE=1.0` → 5 ta zarar) va `scripts/test_f1/test_env_example.py` B7 shu qiymatga pinlangan.
 
 ### F5-3: Yomon davr (trend rejimi) filtrini jonli botga ulash ✅ — 2026-06-20 BAJARILDI
 - [x] ⚠️ **TOPILMA:** jonli bot faqat `regime == "chop"` da to'xtaydi (`agent.py:669`), **"trend" da EMAS**.
@@ -301,10 +303,30 @@ Quyidagi muammolar hal qilindi:
 - [ ] Bot ichidagi kunlik/haftalik Telegram hisobotidan foydalanish.
 - [ ] **Baseline (2026-06-18):** 13 savdo, 2 yutuq / 11 zarar (WR ~15%), sof **+$37.48** ($88.86 − $51.38).
   $58 savdosiz → −$21 (zararda). 1 savdo = shovqin, signal emas.
+- ⚠️ **HOLAT 2026-08-01 (tekshirildi, arvoh qator tozalangandan keyin):** kuzatuv AMALDA BOSHLANMAGAN.
+  `trades.csv` da 23 yozuv, oxirgisi **2026-07-08 17:31** — bot ~24 kundan beri o'chiq.
+  63 kun ichida atigi 5 kun ishlagan (05-06, 05-07, 06-09, 06-18, 07-08).
+  BE'siz **18 savdo: 3 yutuq / 15 zarar (WR 16.7%), sof −$15.29, PF 0.86** — baseline (+$37.48) dan
+  −$53 pastga tushgan. Ya'ni 06-18 dan keyingi yagona savdo kuni (07-08) zarar bilan yakunlangan.
+  **Blokerlik sababi kod emas — uptime.** Bot uzluksiz ishlamaguncha 100 savdoga yetmaydi.
 
 ### F5-6: `lot` (pozitsiya hajmi) yozuvini tuzatish ✅ — 2026-06-20 BAJARILDI
 - [x] ⚠️ Hozir `trades.csv` da `lot=0.0` yoziladi (saqlanmaydi). *(2026-06-20: ildiz sabab — `log_trade_csv(... lot=0.0 ...)` chaqiruvida QATTIQ YOZILGAN 0.0 (`agent.py:2472`), meta'da lot saqlanmas edi. `get_closed_position` faqat {profit, price_close} qaytaradi (volume yo'q) → lot order qo'yish/fill paytida saqlanishi shart. 3 ta meta-yaratish yo'li: (1) market `_trade_meta` → `"lot": lot_each`; (2) limit fill `_trade_meta` → `"lot": float(filled["volume"])` (MT5 haqiqiy hajmi); (3) `recover_from_mt5` ALLAQACHON `"lot": pos["volume"]` saqlardi. CSV log + CLOSED Telegram notify endi `meta.get("lot")` o'qiydi (avval qattiq 0.0). +1 test (CSV lot column persists 0.05). 524/524, ruff 0.)*
 - [⚠️] $58 yutuq −$5 zararlardan ~7x katta hajmda bo'lgan — nazoratsiz hajm bo'lishi mumkin. Tekshirish + to'g'ri yozish. *(Yozish TUZATILDI. Tekshirish: tarixiy trades.csv da lot=0.0 → o'tmishni qayta tiklab bo'lmaydi (close history'da volume yo'q). Bundan keyin haqiqiy hajm ko'rinadi. Hajm pozitsiya-sizing'dan (`risk_amt_z/(sl_pts*tick_val)`, agent.py:2019) — SL masofasi va risk%'ga bog'liq; F5-1 endi 2% qildi. Real account'da F3-2 da 0.05 lot cap rejalashtirilgan. Live lot cap qo'shish ixtiyoriy keyingi qadam.)*
+
+### F5-8: Savdo jurnali yaxlitligi — arvoh savdo + PnL + exit narxi ✅ — 2026-08-01 BAJARILDI
+> `trades.csv` tahlilidan (F2-4 tayyorgarligi) chiqqan 3 ta bug. Ikkalasi ham
+> jonli ma'lumotni buzayotgan edi — F5-5 kuzatuvi boshlanishidan OLDIN tuzatildi.
+
+- [x] **Bug 1 — ARVOH SAVDO (ildiz sabab).** `state/persistence.py:get_state_dir()` `OPENCLAW_STATE_DIR` ni O'QIMAGAN, holbuki `state/db.py:get_db_path()` o'qiydi. Natijada `tmp_state_dir` fixture'i testlarni izolyatsiya qilmagan va **har `pytest` run production `apps/data/state/trade_meta.json` ga mock pozitsiya yozgan** (`test_market_near_entry` ticket=111, entry=2000.0, sl=1995.7, lot=0.25, H1_OB). Jonli bot keyingi startda uni MT5'da topmay "yopilgan" deb hisoblab `trades.csv` ga soxta qator yozgan — **2026-07-08 14:46 qatori** (o'sha kuni real narx 4043 edi). Fix: env chaqiruv paytida o'qiladi (db.py konvensiyasi).
+- [x] **Bug 2 — fallback PnL hajmni hisobga olmagan.** `agent.py` `pnl = -sl_pips * 0.1` faqat 0.01 lot uchun to'g'ri edi. Arvoh qator: 43 pip × 0.25 lot → yozilgani −$4.30, **haqiqiysi −$107.50 (25×)**. Fix: yangi `TraderAgent._money_per_pips(pips, lot)` — broker `point`/`trade_tick_value` orqali (`calculate_position_size` bilan bir xil formula), symbol info yo'q bo'lsa XAUUSD konstantasi ($10/pip/lot). Bonus: history topilmaganda `exit` endi 0.0 emas, SL narxi yoziladi (taxmin aynan SL'ga tayanadi) + warning log.
+- [x] **Bug 3 — `exit == entry`.** `mt5_connector.get_closed_position()` deal turini tekshirmagan (`if deal.price > 0` — ochilish dealida ham price > 0), shuning uchun kirish narxi chiqish narxi sifatida yozilgan. **2026-07-08 17:22 qatori:** entry=exit=4069.99, lekin pnl +4.91. Fix: faqat `DEAL_ENTRY_OUT/INOUT/OUT_BY` deal'lari, qisman yopilishlarda hajm bo'yicha o'rtacha narx; yopuvchi deal yo'q bo'lsa 0.0 ("noma'lum").
+- [x] **Takrorlanishga qarshi himoya:** (1) `utils/trade_analytics.get_csv_path()` + `OPENCLAW_TRADES_CSV` env override — jurnal yo'li endi qattiq yozilgan emas; (2) `tests/conftest.py` ga **autouse** `_isolate_production_files` fixture — har bir test (kelajakda yozilganlari ham) state dir va trades.csv'ni tmp'ga yo'naltiradi; (3) `.env.example` test-only overrides bo'limi yangilandi.
+- [x] **Tozalash:** production `trade_meta.json` dagi arvoh ticket=111 o'chirildi (backup: `trade_meta.json.bak-2026-08-01`). Aks holda bot yoqilishi bilan yana bitta soxta savdo yozardi.
+- [x] **Test:** `tests/unit/test_a2_journal_integrity.py` — 22 test (state izolyatsiyasi 5, chiqish narxi 5, PnL hajm-mutanosibligi 8, CSV yo'li 2, haqiqiy jurnal qatorlarini qayta hisoblash 2). `test_smoke.py::test_log_trade_csv_persists_lot` env override'ga ko'chirildi. **573/573 pytest pass (551+22), ruff 0.** Tasdiq: fixdan keyingi ikki to'liq test runda production `trade_meta.json` va `trades.csv` mtime O'ZGARMADI.
+- [x] **Arvoh qator o'chirildi** *(2026-08-01, foydalanuvchi tasdig'i bilan; backup `brain/trades.csv.bak-2026-08-01`). 2026-07-08 14:46 qatori olib tashlandi. Statistika ta'siri: 19→18 savdo (BE'siz), 3W/16L→3W/15L, WR 15.8%→16.7%, sof PnL −$19.59→**−$15.29**, PF 0.83→0.86. Endi jurnalda arvoh yozuv YO'Q (`grep 2000.0` → 0).*
+- [ ] **Ochiq (kichik):** 2026-07-08 17:22 qatorida `exit == entry == 4069.99` qolgan (Bug 3 ning eski qurboni). Savdoning O'ZI haqiqiy — pnl +$4.91 MT5 history'dan kelgan, faqat exit narxi noto'g'ri yozilgan. To'g'ri qiymat pnl+lot+yo'nalishdan aniq tiklanadi: 4069.99 − 4.91/(0.03×100) = **4068.35**. Moliyaviy yozuvga qo'lda raqam kiritish bo'lgani uchun foydalanuvchi qaroriga qoldirildi. Yangi savdolarda bu bug allaqachon tuzatilgan.
+- **Eslatma:** `scripts/test_f1/test_env_example.py` C8 (start.bat subprocess) FAIL — bu A2 dan OLDIN ham fail bo'lgan (tasdiqlandi: eski `.env.example` bilan ham 9 passed/1 failed), alohida muammo.
 
 ### F5-7: Edge oshirish (kuzatuvdan KEYIN) 🟢
 - [ ] 2025-Q2 filtri ko'rmagan davrlarda (OOS) ishlashini sinash — overfit bo'lmasligi uchun.

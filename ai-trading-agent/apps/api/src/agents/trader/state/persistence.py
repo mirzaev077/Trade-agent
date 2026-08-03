@@ -26,6 +26,24 @@ OPENCLAW_MAGIC = 20240101
 
 
 def get_state_dir(state_dir: Optional[Path] = None) -> Path:
+    """State papkasi. Prioritet: aniq argument → OPENCLAW_STATE_DIR → default.
+
+    A2 BUG (2026-08-01): bu yerda `OPENCLAW_STATE_DIR` O'QILMAS EDI, holbuki
+    `state/db.py:get_db_path()` uni o'qiydi. Natijada `tmp_state_dir` fixture'i
+    testlarni IZOLYATSIYA QILMAGAN va har `pytest` run PRODUCTION
+    `apps/data/state/trade_meta.json` fayliga soxta pozitsiya yozib qo'ygan
+    (masalan `test_market_near_entry` ning mock ticket=111, entry=2000.0).
+    Keyingi jonli startda bot o'sha "ochiq" pozitsiyani MT5'da topmay, uni
+    YOPILGAN deb hisoblab `trades.csv` ga arvoh savdo yozgan
+    (2026-07-08 14:46 qatori — entry 2000.0, o'sha kuni real narx 4043).
+
+    Env o'qish CHAQIRUV paytida bo'lishi shart (import paytida emas) —
+    aks holda `monkeypatch.setenv` importdan keyin ishlamay qolardi.
+    """
+    if state_dir is None:
+        env_dir = os.getenv("OPENCLAW_STATE_DIR")
+        if env_dir:
+            state_dir = Path(env_dir)
     d = state_dir or _DEFAULT_STATE_DIR
     d.mkdir(parents=True, exist_ok=True)
     return d

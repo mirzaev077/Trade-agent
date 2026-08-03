@@ -220,15 +220,21 @@ Comment:  "OpenClaw|<signal_id>"
 
 ## Obsidian integration
 
-Muhim qarorlar, baglar, g'oyalarni avtomatik saqlash:
-```powershell
-powershell -ExecutionPolicy Bypass -File ~\.claude\scripts\obsidian-note.ps1 decision ai-agent "<title>" "<body>"
-powershell -ExecutionPolicy Bypass -File ~\.claude\scripts\obsidian-note.ps1 bug ai-agent "<title>" "<body>"
-powershell -ExecutionPolicy Bypass -File ~\.claude\scripts\obsidian-note.ps1 idea ai-agent "<title>" "<body>"
-powershell -ExecutionPolicy Bypass -File ~\.claude\scripts\obsidian-note.ps1 todo ai-agent "<title>" "<body>"
+> ⚠️ **Eskirgan yo'l tuzatildi (2026-08-01):** avval bu yerda
+> `~\.claude\scripts\obsidian-note.ps1` va `Obsidian Vault/PROJECTS/ai-agent/`
+> ko'rsatilgan edi — **ikkalasi ham mavjud emas**.
+
+**Haqiqiy vault:** `~/Documents/Obsidian Vault/ai-agent/`
+
+```
+ai-agent/
+├── project-state.md          ← joriy holat (jonli hujjat)
+├── sessions/YYYY-MM-DD_*.md  ← sessiya notalari
+└── sessions/_auto-log.md     ← SessionEnd hook avtomatik
 ```
 
-Vault joylashuvi: `~/Documents/Obsidian Vault/PROJECTS/ai-agent/`
+**Sessiya yopilayotganda bajariladigan to'liq protokol:** `TRD/CLAUDE.md`
+(workspace root) — u har sessiyada yuklanadi.
 
 ---
 

@@ -2,6 +2,7 @@
 F1-5: Shared pytest fixtures for unit tests.
 
 Fixtures:
+  • _isolate_production_files   — AUTOUSE: state dir + trades.csv → tmp (A2 guard)
   • mock_mt5_connector          — MT5Connector MagicMock (connected, no positions)
   • sample_candles_xauusd_m15   — 200-bar synthetic XAUUSD M15 OHLCV DataFrame
   • frozen_now                  — freezegun fixed clock (2026-05-14 12:00 UTC)
@@ -140,11 +141,38 @@ def clean_config_env(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _isolate_production_files(monkeypatch, tmp_path_factory):
+    """A2: HAR BIR test jonli fayllardan ajratiladi (autouse — so'rash shart emas).
+
+    2026-08-01 da aniqlangan hodisa: `persistence.py:get_state_dir()`
+    `OPENCLAW_STATE_DIR` ni o'qimasdi, shuning uchun `test_market_near_entry`
+    kabi agent testlari PRODUCTION `apps/data/state/trade_meta.json` fayliga
+    mock pozitsiya (ticket=111, entry=2000.0) yozib qo'ygan. Jonli bot keyingi
+    startda uni MT5'da topmay "yopilgan" deb hisoblab, `brain/trades.csv` ga
+    arvoh savdo yozgan (2026-07-08 14:46 qatori).
+
+    Faqat kodni tuzatish yetarli emas — bu fixture kelajakda YANGI yozilgan
+    test ham jonli fayllarga tegib ketmasligini kafolatlaydi:
+      • OPENCLAW_STATE_DIR   → state/persistence.py + state/db.py
+      • OPENCLAW_TRADES_CSV  → utils/trade_analytics.log_trade_csv
+      • OPENCLAW_LOG_DIR     → utils/logging_setup.get_log_dir
+
+    Aniq `tmp_state_dir` so'ragan testlar o'z papkasini ustiga yozadi (ular
+    autouse'dan KEYIN ishlaydi) — xulq o'zgarmaydi.
+    """
+    tmp = tmp_path_factory.mktemp("openclaw_isolated")
+    monkeypatch.setenv("OPENCLAW_STATE_DIR", str(tmp))
+    monkeypatch.setenv("OPENCLAW_TRADES_CSV", str(tmp / "trades.csv"))
+    monkeypatch.setenv("OPENCLAW_LOG_DIR", str(tmp / "logs"))
+    yield tmp
+
+
 @pytest.fixture
 def tmp_state_dir(monkeypatch):
     """
-    Vaqtinchalik state dir — db.py va admin_cli.py shu yerga yozadi.
-    OPENCLAW_STATE_DIR env'ni o'rnatadi (db.py shuni o'qiydi).
+    Vaqtinchalik state dir — db.py, persistence.py va admin_cli.py shu yerga yozadi.
+    OPENCLAW_STATE_DIR env'ni o'rnatadi.
     """
     with tempfile.TemporaryDirectory(prefix="openclaw_test_") as tmp:
         monkeypatch.setenv("OPENCLAW_STATE_DIR", tmp)
