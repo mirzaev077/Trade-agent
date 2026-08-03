@@ -19,6 +19,14 @@ _root = Path(__file__).parent.parent.parent
 load_dotenv(_root / ".env", override=True)
 
 from loguru import logger
+
+# Fayl log'ini ENG BOSHIDA yoqamiz — bundan keyingi har bir import va
+# startup xatosi diskka tushsin. Ilgari log faqat stderr'da edi, shuning
+# uchun oyna yopilishi bilan crash sababi yo'qolardi (B3 blokeri).
+from src.agents.trader.utils.logging_setup import setup_logging
+
+_LOG_FILE = setup_logging()
+
 from src.agents.trader import TraderAgent, TradingConfig
 from src.agents.trader.utils.telegram_bot import (
     notify_crash as _tg_notify_crash,
@@ -46,6 +54,14 @@ def _crash_handler(exc_type, exc_value, exc_tb):
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_tb)
         return
+    # Avval DISKKA yozamiz — Telegram yoki stderr ishlamay qolsa ham
+    # crash sababi `errors.log` da qoladi. B3: aynan shu yozuv yetishmasdi.
+    try:
+        logger.opt(exception=(exc_type, exc_value, exc_tb)).critical(
+            f"[crash] Kutilmagan xato — bot to'xtadi: {exc_type.__name__}: {exc_value}"
+        )
+    except Exception:  # noqa: BLE001 — crash ichida crash yo'q
+        pass
     try:
         tb_str = "".join(traceback.format_tb(exc_tb))[-2500:]
         _tg_notify_crash(exc_type, exc_value, tb_str)
@@ -80,6 +96,12 @@ def _shutdown_handler(signum, frame):
         _tg_notify_shutdown(reason)
     except Exception:  # noqa: BLE001
         pass
+    # enqueue=True — navbatdagi yozuvlar diskka yetib borsin, keyin chiqamiz
+    try:
+        from src.agents.trader.utils.logging_setup import shutdown_logging
+        shutdown_logging()
+    except Exception:  # noqa: BLE001
+        pass
     sys.exit(0)
 
 
@@ -111,7 +133,22 @@ else:
 
 # ── Hot Reload ────────────────────────────────────────────────────────────────
 
-_WATCH_DIR = Path(__file__).parent.parent / "src" / "agents" / "trader"
+# BUG (2026-08-03 gacha): bu yerda `parent.parent` yozilgan edi va yo'l
+# `apps/src/agents/trader` ga ishora qilardi — bunday papka MAVJUD EMAS.
+# `rglob("*.py")` bo'sh ro'yxat qaytargani uchun watcher hech qachon
+# ishlamagan, lekin startupda "HOT RELOAD yoqilgan" deb yozilardi. Xato
+# jimgina yutilgan: kod o'zgarsa ham bot qayta yuklanmagan.
+# main.py `apps/api/` ichida, ya'ni kod papkasiga bitta `parent` yetadi.
+_WATCH_DIR = Path(__file__).resolve().parent / "src" / "agents" / "trader"
+
+
+def _hot_reload_enabled() -> bool:
+    """`HOT_RELOAD` env kaliti. Default: yoqilgan (avvaldan e'lon qilingan xulq).
+
+    F5-5 (100+ savdo, ~30 kun uzluksiz) davomida kodga tegib ketish jonli
+    botni qayta ishga tushirmasin desangiz — `.env` da `HOT_RELOAD=false`.
+    """
+    return os.getenv("HOT_RELOAD", "true").strip().lower() not in {"false", "0", "no", "off"}
 
 # Reload qilish tartibi: leaf → root (dependency order)
 _RELOAD_ORDER = [
@@ -327,7 +364,16 @@ async def _run_agent(config: TradingConfig) -> bool:
         restart_flag[0] = True
         agent.running   = False   # run() loopini to'xtatadi
 
-    watcher = _FileWatcher(_WATCH_DIR, _on_change)
+    # Watcher faqat papka HAQIQATAN mavjud bo'lsa quriladi. Yo'l noto'g'ri
+    # bo'lsa endi jimgina o'tib ketmaydi — ogohlantirish yoziladi (aynan shu
+    # jimlik bugni oylab yashirgan).
+    watcher = None
+    if not _hot_reload_enabled():
+        logger.info("[HOT RELOAD] o'chirilgan (HOT_RELOAD=false)")
+    elif not _WATCH_DIR.is_dir():
+        logger.warning(f"[HOT RELOAD] kuzatuv papkasi topilmadi: {_WATCH_DIR} — o'chirildi")
+    else:
+        watcher = _FileWatcher(_WATCH_DIR, _on_change)
 
     try:
         agent.connect(config.mt5_login, config.mt5_password, config.mt5_server)
@@ -343,19 +389,26 @@ async def _run_agent(config: TradingConfig) -> bool:
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[telegram] wire-up xato: {e}")
 
+    # Xabar HAQIQIY holatni aytsin — avval watcher o'lik bo'lsa ham
+    # "yoqilgan" deb yozilardi va shu yolg'on bugni yashirgan.
+    _hr = (
+        "HOT RELOAD yoqilgan — fayl saqlansang agent o'zi qayta ishga tushadi"
+        if watcher is not None else "HOT RELOAD o'chiq"
+    )
     logger.info(
         f"Trading boshlandi! {config.symbol} "
-        f"har {config.scan_interval}s scan. "
-        f"[HOT RELOAD yoqilgan — fayl saqlansang agent o'zi qayta ishga tushadi]"
+        f"har {config.scan_interval}s scan. [{_hr}]"
     )
 
-    watcher.start()
+    if watcher is not None:
+        watcher.start()
     try:
         await agent.run()
     except KeyboardInterrupt:
         agent.running = False
     finally:
-        watcher.stop()
+        if watcher is not None:
+            watcher.stop()
         try:
             _tg_stop_polling()
         except Exception as e:  # noqa: BLE001
@@ -365,6 +418,7 @@ async def _run_agent(config: TradingConfig) -> bool:
 
 
 async def main():
+    logger.info(f"[logging] fayl log yoqildi: {_LOG_FILE}  (xatolar: {_LOG_FILE.parent / 'errors.log'})")
     config = onboarding()
 
     # F1-4: healthcheck endpoint'ni daemon thread'da ishga tushirish

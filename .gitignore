@@ -3,7 +3,18 @@
 .env.local
 .env.*.local
 *.env
+# 2026-08-03: `.env` ni tahrirlashdan oldin backup olinadi
+# (`.env.bak-YYYY-MM-DD`), lekin yuqoridagi naqshlarning BIRORTASI uni
+# tutmasdi — parol, Claude API kaliti va Telegram tokeni git'ga tushib
+# ketishi mumkin edi. Quyidagi qator har qanday `.env.<nimadir>` ni yopadi.
+.env.*
 !.env.example
+
+# Jonli fayllarni tahrirlashdan oldin olinadigan backuplar
+# (trades.csv.bak-…, trade_meta.json.bak-…, .env.bak-…). Git'ning o'zi
+# tarixni saqlaydi — backup nusxalari repo'ga kerak emas va ular
+# ba'zan sir yoki moliyaviy yozuv nusxasini olib yuradi.
+*.bak-*
 **/credentials.json
 **/secrets.json
 *.pem
