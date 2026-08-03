@@ -608,6 +608,99 @@ class MT5Connector:
             result.append({"position_id": pid, "pnl": round(pnl, 2)})
         return result
 
+    def get_todays_activity(self, lookback_days: int = 30) -> dict:
+        """T1: bugungi OpenClaw faoliyati — restartdan keyin kunlik
+        hisoblagichlarni tiklash uchun.
+
+        MUAMMO: `RiskManagement._today_trades` va `_daily_open_count` faqat
+        xotirada yashaydi va ular JONLI yopilish hodisasidan to'ldiriladi
+        (agent.py `add_closed_trade`). Bot qayta ishga tushsa ikkalasi ham
+        nolga qaytadi — ya'ni `DAILY_MAX_RISK` va `MAX_TRADES_PER_DAY`
+        qaytadan boshlanadi. Kun davomida bir necha marta restart qilinsa
+        (foydalanuvchi PC ni uzluksiz yoqib tura olmaydi) "kunlik 4%"
+        amalda "seansiga 4%" ga aylanadi.
+
+        MAGIC bo'yicha filtrlashning nozik joyi: SL/TP bilan yopilgan
+        deal'da `magic` 0 bo'lishi mumkin — u brokerning server tomonidan
+        yaratiladi. Shuning uchun avval OCHILISH deal'i (`DEAL_ENTRY_IN`,
+        magic har doim saqlanadi) bo'yicha "bizniki" position_id to'plami
+        yig'iladi, keyin o'sha pozitsiyalarning BARCHA deal'lari magicdan
+        qat'i nazar hisobga olinadi.
+
+        Args:
+            lookback_days: deal tarixi oynasi. Uzoq oyna kerak, chunki
+                kecha (yoki undan oldin) ochilib bugun yopilgan pozitsiyaning
+                ochilish deal'i ham topilishi shart.
+
+        Returns:
+            {
+              "closed": [{"position_id": int, "pnl": float, "close_time": datetime}],
+              "opened_count": int,   # BUGUN ochilgan pozitsiyalar soni
+            }
+            `closed` — faqat BUGUN yopilganlari (kunlik zarar darvozasi uchun).
+        """
+        empty = {"closed": [], "opened_count": 0}
+        if self._sim_mode:
+            return empty
+        from datetime import timedelta
+
+        now = get_clock().now()
+        date_to = now + timedelta(hours=1)
+        date_from = date_to - timedelta(days=lookback_days)
+        deals = mt5.history_deals_get(date_from, date_to)
+        if not deals:
+            return empty
+
+        _IN = getattr(mt5, "DEAL_ENTRY_IN", 0)
+        _OUT_KINDS = {
+            getattr(mt5, "DEAL_ENTRY_OUT", 1),
+            getattr(mt5, "DEAL_ENTRY_INOUT", 2),
+            getattr(mt5, "DEAL_ENTRY_OUT_BY", 3),
+        }
+        today = now.date()
+
+        # 1-bosqich: ochilish deal'i bo'yicha OpenClaw pozitsiyalarini aniqlash
+        ours: set = set()
+        opened_today: set = set()
+        for d in deals:
+            if getattr(d, "entry", None) != _IN or getattr(d, "magic", 0) != 20240101:
+                continue
+            ours.add(d.position_id)
+            if self._deal_time(d) is not None and self._deal_time(d).date() == today:
+                opened_today.add(d.position_id)
+
+        # 2-bosqich: shu pozitsiyalarning PnL'i va yopilish vaqti
+        pnl_by_pos: dict = {}
+        closed_at: dict = {}
+        for d in deals:
+            pid = d.position_id
+            if pid not in ours:
+                continue
+            pnl_by_pos[pid] = pnl_by_pos.get(pid, 0.0) + d.profit + d.swap + d.commission
+            if getattr(d, "entry", None) in _OUT_KINDS:
+                t = self._deal_time(d)
+                if t is not None and (pid not in closed_at or t > closed_at[pid]):
+                    closed_at[pid] = t
+
+        closed = [
+            {"position_id": pid, "pnl": round(pnl_by_pos.get(pid, 0.0), 2), "close_time": t}
+            for pid, t in closed_at.items()
+            if t.date() == today
+        ]
+        closed.sort(key=lambda r: r["close_time"])
+        return {"closed": closed, "opened_count": len(opened_today)}
+
+    @staticmethod
+    def _deal_time(deal):
+        """Deal vaqtini tz-aware datetime qilib qaytaradi (MT5 POSIX beradi)."""
+        raw = getattr(deal, "time", None)
+        if not raw:
+            return None
+        try:
+            return datetime.fromtimestamp(float(raw), tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+
     def _generate_sim_candles(self, count: int) -> pd.DataFrame:
         import numpy as np
         from datetime import datetime, timedelta

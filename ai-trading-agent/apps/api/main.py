@@ -39,6 +39,36 @@ from src.agents.trader.health import HealthState, start_health_server_in_thread
 # F1-4: bot ishga tushganda yagona shared state — agent va FastAPI o'rtasida
 _HEALTH_STATE = HealthState()
 
+# T2: chiqishda pending orderlarni tozalash uchun ishlab turgan agentga havola.
+# Signal handler modul darajasida yashaydi va agent obyektiga boshqa yo'l bilan
+# yeta olmaydi.
+_ACTIVE_AGENT = None
+
+
+def _cancel_pending_on_exit_enabled() -> bool:
+    """`CANCEL_PENDING_ON_EXIT` env kaliti. Default: yoqilgan.
+
+    Bot o'chganda uning pending limit orderlari brokerda qolib ketardi va
+    o'chiq paytda ochilib, boshqaruvsiz qolardi. `false` qo'yilsa eski
+    xulq saqlanadi (pendinglar qoldiriladi).
+    """
+    return os.getenv("CANCEL_PENDING_ON_EXIT", "true").strip().lower() not in {
+        "false", "0", "no", "off",
+    }
+
+
+def _cleanup_pending(reason: str) -> None:
+    """Chiqishdan oldin OpenClaw pendinglarini bekor qilish (T2). Hech qachon otmaydi."""
+    agent = _ACTIVE_AGENT
+    if agent is None or not _cancel_pending_on_exit_enabled():
+        return
+    try:
+        n = agent.cancel_all_pending_orders()
+        if n:
+            logger.warning(f"[T2] {reason}: {n} ta pending order bekor qilindi")
+    except Exception as e:  # noqa: BLE001 — tozalash chiqishni bloklamasin
+        logger.warning(f"[T2] pending tozalash xatosi ({reason}): {e}")
+
 
 # ── Crash + shutdown alerts (F0-3) ────────────────────────────────────────────
 #
@@ -92,6 +122,9 @@ def _shutdown_handler(signum, frame):
         logger.warning(f"[shutdown] {reason} qabul qilindi — bot to'xtatilmoqda...")
     except Exception:  # noqa: BLE001
         pass
+    # T2: pendinglarni Telegram xabaridan OLDIN tozalaymiz — tarmoq sekin
+    # bo'lsa ham brokerdagi orderlar qolib ketmasin.
+    _cleanup_pending(reason)
     try:
         _tg_notify_shutdown(reason)
     except Exception:  # noqa: BLE001
@@ -356,7 +389,9 @@ async def _run_agent(config: TradingConfig) -> bool:
     # Har safar fresh import (reload dan keyin yangi class talab qilinadi)
     from src.agents.trader import TraderAgent as _Agent
 
+    global _ACTIVE_AGENT
     agent        = _Agent(config, health_state=_HEALTH_STATE)
+    _ACTIVE_AGENT = agent          # T2: signal handler shu orqali topadi
     restart_flag = [False]
 
     def _on_change(filename: str):
@@ -409,6 +444,10 @@ async def _run_agent(config: TradingConfig) -> bool:
     finally:
         if watcher is not None:
             watcher.stop()
+        # T2: loop to'xtaganda pendinglarni qoldirmaymiz. Hot reload'da ham
+        # tozalanadi — qayta yuklangan agent zonalarni yangidan qo'yadi,
+        # eskilari esa boshqaruvsiz osilib qolmaydi.
+        _cleanup_pending("HOT RELOAD" if restart_flag[0] else "to'xtatish")
         try:
             _tg_stop_polling()
         except Exception as e:  # noqa: BLE001

@@ -1,4 +1,6 @@
 import asyncio
+import os
+
 from loguru import logger
 
 from .core.clock import get_clock
@@ -298,8 +300,138 @@ class TraderAgent:
             except Exception as _re:
                 logger.error(f"recover_from_mt5 failed: {_re}")
 
+        # T1: kunlik hisoblagichlarni MT5 tarixidan tiklash (restart himoyasi)
+        self._restore_daily_state(float(info.get("balance", 0)))
+
+        # T2 (start tomoni): oldingi seansdan qolgan YETIM pendinglarni tozalash.
+        # Chiqishdagi tozalash faqat "chiroyli" o'chishda ishlaydi (Ctrl+C).
+        # Tok o'chsa, PC uxlasa yoki oyna X bilan yopilsa handler chaqirilmaydi
+        # va orderlar brokerda qolib ketadi. Startda `_pending_zones` bo'sh —
+        # demak bizning magic bilan turgan HAR QANDAY pending boshqaruvsiz.
+        self._cancel_orphan_pendings()
+
         logger.success(f"MT5 connected: #{info['login']}  Balance=${info['balance']:.2f}")
         return info
+
+    def _restore_daily_state(self, balance_now: float) -> None:
+        """T1: restartdan keyin bugungi kunlik holatni MT5 tarixidan tiklash.
+
+        Busiz har qayta ishga tushirish `DAILY_MAX_RISK` (4%),
+        `MAX_TRADES_PER_DAY` (12) va drawdown bazasini NOLLAB yuboradi:
+        `RiskManagement._today_trades` / `_daily_open_count` faqat xotirada
+        yashaydi va ular jonli yopilish hodisasidan to'ldiriladi. Bot 4%
+        yo'qotib breaker ishlagach qayta ishga tushirilsa, yana 4% yo'qotishi
+        mumkin edi — "kunlik" limit amalda "seansiga" limitga aylanardi.
+
+        Foydalanuvchi kompyuterni uzluksiz yoqib tura olmaydi (kuniga bir
+        necha marta restart), shuning uchun bu yo'l F5-5 uchun shart.
+
+        `_starting_balance` ham kun BOSHIDAGI balansga tuzatiladi
+        (joriy balans − bugun realizatsiya qilingan PnL). Shunda drawdown
+        breaker va `daily_pnl_pct` restartdan keyin ham to'g'ri hisoblanadi.
+        """
+        try:
+            activity = self.mt5.get_todays_activity()
+        except Exception as e:  # noqa: BLE001 — tiklash startni buzmasin
+            logger.warning(f"[T1] kunlik holatni tiklab bo'lmadi: {e}")
+            return
+
+        closed = activity.get("closed") or []
+        opened = int(activity.get("opened_count") or 0)
+        if not closed and not opened:
+            logger.info("[T1] bugun yopilgan/ochilgan savdo yo'q — kunlik hisob toza")
+            return
+
+        today = get_clock().now().date()
+        self.risk._count_date = today          # _reset_if_new_day tiklanganni o'chirmasin
+        self.risk._today_trades = [
+            {"pnl": t["pnl"], "close_time": t["close_time"]} for t in closed
+        ]
+        self.risk._daily_open_count = opened
+
+        realized = sum(t["pnl"] for t in closed)
+        if balance_now > 0:
+            self._starting_balance = balance_now - realized
+
+        loss = sum(t["pnl"] for t in closed if t["pnl"] < 0)
+        loss_pct = abs(loss) / self._starting_balance * 100 if self._starting_balance > 0 else 0.0
+        logger.warning(
+            f"[T1] Kunlik holat tiklandi: {len(closed)} yopilgan, {opened} ochilgan, "
+            f"realized ${realized:+.2f} (zarar {loss_pct:.2f}% / {self.config.daily_max_risk}%), "
+            f"kun boshi balans ${self._starting_balance:.2f}"
+        )
+
+    def _cancel_orphan_pendings(self) -> int:
+        """T2 (start tomoni): oldingi seansdan qolgan pendinglarni tozalash.
+
+        Chiqishdagi tozalash signal handler'ga bog'liq va u FAQAT chiroyli
+        o'chishda (Ctrl+C / Ctrl+Break) ishlaydi. Windows'da oynani X bilan
+        yopish, PC ni o'chirish yoki tok uzilishi handler'ni chaqirmaydi —
+        Python signal moduli `CTRL_CLOSE_EVENT`/`CTRL_SHUTDOWN_EVENT` ni
+        signalga bog'lamaydi. Foydalanuvchi kompyuterni har kuni o'chiradi,
+        ya'ni bu yo'l amalda eng ko'p uchraydigan yo'l.
+
+        Shuning uchun himoyaning ikkinchi qavati START tomonida: bu paytda
+        `_pending_zones` bo'sh, demak bizning magic bilan brokerda turgan
+        har qanday pending — oldingi seansning yetimi. Ularni saqlab qolishning
+        ma'nosi yo'q: zonalar eski bozor holatiga qurilgan va bot ularni
+        boshqara olmaydi.
+
+        `CANCEL_PENDING_ON_EXIT=false` bo'lsa bu ham o'chadi (bitta kalit —
+        "pendinglarga tegma" degani).
+        """
+        if os.getenv("CANCEL_PENDING_ON_EXIT", "true").strip().lower() in {
+            "false", "0", "no", "off",
+        }:
+            return 0
+        n = self.cancel_all_pending_orders()
+        if n:
+            logger.warning(f"[T2] Startda {n} ta yetim pending tozalandi (oldingi seansdan)")
+        return n
+
+    def cancel_all_pending_orders(self) -> int:
+        """T2: OpenClaw qo'ygan barcha pending limit orderlarni bekor qiladi.
+
+        Bot o'chganda pending orderlar BROKERDA qolib ketardi: `_pending_zones`
+        faqat xotirada (restartda yo'qoladi) va shutdown'da tozalash yo'q edi.
+        Natijada o'chiq paytda narx zonaga yetib order ochilardi — va uni hech
+        kim boshqarmasdi (trailing SL yo'q, TP1 qisman yopish yo'q).
+        Qayta ishga tushganda `recover_from_mt5` faqat POZITSIYALARNI tiklaydi,
+        pendinglarni emas.
+
+        MAGIC filtri MAJBURIY: `get_pending_orders()` hisobdagi HAMMA orderni
+        qaytaradi, shu jumladan foydalanuvchi qo'lda qo'yganlarini ham.
+        Faqat 20240101 magic bilan qo'yilganlar bekor qilinadi.
+
+        Returns:
+            Bekor qilingan orderlar soni.
+        """
+        try:
+            orders = self.mt5.get_pending_orders(self.symbol) or []
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[T2] pending orderlarni o'qib bo'lmadi: {e}")
+            return 0
+
+        ours = [o for o in orders if o.get("magic") == 20240101]
+        if not ours:
+            return 0
+
+        cancelled = 0
+        for o in ours:
+            ticket = o.get("ticket")
+            if not ticket:
+                continue
+            try:
+                if self.mt5.cancel_pending_order(ticket):
+                    cancelled += 1
+                else:
+                    logger.warning(f"[T2] pending #{ticket} bekor qilinmadi")
+            except Exception as e:  # noqa: BLE001 — bittasi tushsa qolganlari davom etsin
+                logger.warning(f"[T2] pending #{ticket} bekor qilishda xato: {e}")
+
+        self._pending_zones.clear()
+        logger.warning(f"[T2] Chiqishdan oldin {cancelled}/{len(ours)} pending order bekor qilindi")
+        return cancelled
 
     # ── Main Loop ─────────────────────────────────────────────────
 
