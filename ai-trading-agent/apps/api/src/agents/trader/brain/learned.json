@@ -61,21 +61,6 @@
       "regime": "trend"
     },
     {
-      "ts": "2026-07-08T14:46:28.355948+00:00",
-      "entry_type": "OB",
-      "tf": "H1",
-      "session": "overlap",
-      "day": "wednesday",
-      "session_day_key": "overlap_wednesday",
-      "direction": "buy",
-      "sl_pips": 43.0,
-      "tp_pips": 86.0,
-      "result": "loss",
-      "pnl": -4.3,
-      "mode": "FLOW",
-      "regime": "range"
-    },
-    {
       "ts": "2026-07-08T16:40:20.364656+00:00",
       "entry_type": "OB",
       "tf": "H4",
@@ -178,7 +163,7 @@
     "session_weights": {}
   },
   "stats": {
-    "total": 10,
+    "total": 9,
     "last_analysis_at": 0,
     "last_evolution_at": 0
   },
@@ -187,15 +172,11 @@
       "wins": 1,
       "losses": 0
     },
-    "london_tuesday": {
-      "wins": 0,
-      "losses": 1
-    },
     "london_thursday": {
       "wins": 1,
       "losses": 1
     },
-    "overlap_wednesday": {
+    "london_tuesday": {
       "wins": 0,
       "losses": 1
     },
