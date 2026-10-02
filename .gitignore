@@ -76,3 +76,16 @@ logs/
 # ─── OS ───────────────────────────────────────────────────────────
 Thumbs.db
 Desktop.ini
+
+# ─── 2026-10-02: Untracked artefaktlar (operator qarori bilan ignore) ─
+# Manba hujjatlar: agent manifesti (soul) va texnik topshiriq (TZ) —
+# md manbadan docx/html/pdf generatsiya qilinadi. Diskda saqlanadi,
+# lekin git tarixiga shart emas (yirik pdf, qayta generatsiya mumkin).
+soul.*
+TZ.*
+# Hujjat generatsiya skripti
+tools/
+# research/: 434M alohida muhit — to'liq .venv + data/models/reports/src.
+# Build artefakti, MT5/pipeline'dan qayta tiklanadi. Git'ga sira kirmaydi.
+research/
+ai-trading-agent/research/
