@@ -6,6 +6,24 @@ Assigns: SNIPER mode (D1+H4 aligned) or FLOW mode (diverged/ranging)
 """
 from dataclasses import dataclass
 
+SNIPER = "SNIPER"
+FLOW = "FLOW"
+
+
+def is_sniper_aligned(d1_trend: str, h4_trend: str) -> bool:
+    """D1 and H4 trending the same non-sideways direction → SNIPER mode.
+
+    Split out as a pure predicate so the backtest analyst can decide SNIPER /
+    FLOW the same way the live agent does (``--reduced-days`` needs the mode).
+    Keeping a second copy in the engine is how live-only rules end up
+    unbacktested — see ``engine.regime.structure_regime``.
+    """
+    return (
+        d1_trend not in ("sideways", "neutral")
+        and h4_trend not in ("sideways", "neutral")
+        and d1_trend == h4_trend
+    )
+
 
 @dataclass
 class HTFBiasResult:
@@ -78,11 +96,7 @@ class HTFBiasAgent:
         )
 
         # Alignment: D1 va H4 bir xil yo'nalishda
-        aligned = (
-            d1_trend not in ("sideways", "neutral") and
-            h4_trend not in ("sideways", "neutral") and
-            d1_trend == h4_trend
-        )
+        aligned = is_sniper_aligned(d1_trend, h4_trend)
 
         # W1 confirms when Weekly trend matches effective bias
         w1_confirmed = (
@@ -103,7 +117,7 @@ class HTFBiasAgent:
             confidence = max(d1_w, h4_w) * 0.50 + h1_w * 0.13 + w1_bonus
 
         confidence = round(min(confidence, 1.0), 2)
-        mode = "SNIPER" if aligned else "FLOW"
+        mode = SNIPER if aligned else FLOW
 
         return HTFBiasResult(
             bias=bias,

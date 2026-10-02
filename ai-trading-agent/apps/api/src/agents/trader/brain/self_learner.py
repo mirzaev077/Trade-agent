@@ -33,6 +33,8 @@ import os
 from datetime import datetime, timezone
 from loguru import logger
 
+from apps.api.src.agents.trader.engine.regime import structure_regime_from_ict
+
 # F1-1 imports — DB approval gate va Telegram notify
 try:
     from apps.api.src.agents.trader.state import db as _db
@@ -429,17 +431,13 @@ class SelfLearner:
         return float(self.data["adapted"]["sl_multiplier"])
 
     def get_regime(self, ict_h4, ict_h1) -> str:
-        """Detect market regime: trend / range / chop."""
-        h4_trend = ict_h4.structure.get("trend", "sideways")
-        h4_bos   = int(ict_h4.structure.get("bos", 0))
-        h4_choch = ict_h4.structure.get("choch", False)
-        h1_trend = ict_h1.structure.get("trend", "sideways")
+        """Detect market regime: trend / range / chop.
 
-        if h4_trend != "sideways" and h4_bos >= 2:
-            return "trend"
-        if h4_trend == "sideways" and h1_trend == "sideways" and not h4_choch:
-            return "chop"
-        return "range"
+        Thin delegate — the rule itself lives in ``engine.regime`` so the
+        backtest analyst (``--chop-gate``) evaluates the *same* code. Keeping a
+        second copy here is how the live "chop" skip ended up unbacktested.
+        """
+        return structure_regime_from_ict(ict_h4, ict_h1)
 
     # ── Analysis (every 20 trades) ────────────────────────────────
 

@@ -51,6 +51,11 @@ class BacktestParams:
     regime_atr_period: int = 14
     regime_block_setup: tuple[str, ...] = ()
     min_rr: float = 0.0
+    # Live-parity gates. Both off by default — a bare run must keep reproducing
+    # v5rr exactly. ``reduced_days`` holds weekday ints (Mon=0..Sun=6); the live
+    # trader uses {0, 4}.
+    chop_gate: bool = False
+    reduced_days: tuple[int, ...] = ()
 
 
 @dataclass
@@ -60,6 +65,11 @@ class RunArtifacts:
     closed_trades: list
     equity_curve: list
     broker_summary: dict
+    # Analyst-side cycle accounting. The skip counters stay 0 whenever their
+    # gate is off, so callers can print block rates unconditionally.
+    cycles_seen: int = 0
+    cycles_chop_skipped: int = 0
+    cycles_reduced_day_skipped: int = 0
 
 
 def _timeframes_for(primary: str) -> tuple[str, ...]:
@@ -92,7 +102,8 @@ def build_analyst(params: BacktestParams, clock, data) -> ICTAnalyst:
         )
     return ICTAnalyst(
         clock=clock, data=data, blocked_setups=blocked, regime=regime,
-        min_rr=params.min_rr,
+        min_rr=params.min_rr, chop_gate=params.chop_gate,
+        reduced_days=params.reduced_days,
     )
 
 
@@ -167,6 +178,11 @@ def run_backtest(
             closed_trades=closed_trades,
             equity_curve=equity_curve,
             broker_summary=broker_summary,
+            cycles_seen=getattr(analyst, "cycles_seen", 0),
+            cycles_chop_skipped=getattr(analyst, "cycles_chop_skipped", 0),
+            cycles_reduced_day_skipped=getattr(
+                analyst, "cycles_reduced_day_skipped", 0
+            ),
         )
     finally:
         set_clock(None)

@@ -51,6 +51,55 @@ DEFAULT_REGIME_BLOCKED_SETUPS: frozenset[str] = frozenset({
 HIGH_VOL = "HIGH_VOL"
 NORMAL = "NORMAL"
 
+# ── Structural regime (trend / range / chop) ─────────────────────────────────
+# Distinct from the volatility gate above: this reads HTF *structure*, not
+# realised volatility. It is the live trader's ``SelfLearner.get_regime`` call
+# (``agent.py`` skips the whole tick when it returns "chop"), lifted here so the
+# live agent and the backtest analyst share ONE implementation. Before this the
+# gate existed only in the live path, so every backtest number described a
+# strategy the live bot was not running (2026-08-16 filter diagnosis).
+TREND = "trend"
+RANGE = "range"
+CHOP = "chop"
+
+
+def structure_regime(
+    h4_trend: str, h4_bos: int, h4_choch: bool, h1_trend: str
+) -> str:
+    """Classify HTF structure into ``trend`` / ``range`` / ``chop``.
+
+    Verbatim port of the live rule — do not "improve" it here without changing
+    the live agent too, that divergence is exactly what this function exists to
+    prevent:
+
+    * H4 trending **and** >= 2 BOS -> ``trend``
+    * H4 and H1 both sideways, no H4 CHoCH -> ``chop``
+    * otherwise -> ``range``
+    """
+    if h4_trend != "sideways" and h4_bos >= 2:
+        return TREND
+    if h4_trend == "sideways" and h1_trend == "sideways" and not h4_choch:
+        return CHOP
+    return RANGE
+
+
+def structure_regime_from_ict(ict_h4, ict_h1) -> str:
+    """:func:`structure_regime` from two ``ICTSignal``-likes.
+
+    A missing / ``None`` timeframe degrades to ``sideways`` + no BOS + no CHoCH,
+    matching the live ``.structure.get(..., "sideways")`` defaults. Note what
+    that implies for the CHOP branch: absent H1 data reads as sideways, so an
+    already-sideways H4 lands on ``chop``.
+    """
+    h4 = getattr(ict_h4, "structure", None) or {}
+    h1 = getattr(ict_h1, "structure", None) or {}
+    return structure_regime(
+        h4_trend=h4.get("trend", "sideways"),
+        h4_bos=int(h4.get("bos", 0) or 0),
+        h4_choch=bool(h4.get("choch", False)),
+        h1_trend=h1.get("trend", "sideways"),
+    )
+
 
 @dataclass(frozen=True)
 class RegimeGate:

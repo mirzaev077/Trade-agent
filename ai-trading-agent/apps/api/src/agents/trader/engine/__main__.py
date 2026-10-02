@@ -228,6 +228,31 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--chop-gate",
+        action="store_true",
+        help=(
+            "Live-parity structural CHOP gate: skip the whole cycle when H4 and "
+            "H1 are both sideways with no H4 CHoCH (port of agent.py:900). OFF "
+            "by default, so a bare run reproduces v5rr. The live trader has "
+            "always had this gate and the backtest never did — turn it on to "
+            "measure what it costs in trades / PF."
+        ),
+    )
+    p.add_argument(
+        "--reduced-days",
+        default="",
+        metavar="DAYS",
+        help=(
+            "Live-parity reduced-day rule: comma-separated weekday numbers "
+            "(Mon=0..Sun=6) on which only SNIPER (D1+H4 aligned) setups may "
+            "trade — FLOW cycles are dropped (port of agent.py:1057). The live "
+            "trader uses '0,4'. Empty by default. WARNING: the backtest loads "
+            "no D1 parquet, so SNIPER never triggers and this drops EVERY "
+            "cycle on the listed days — which is what the live bot does too "
+            "(D1 was sideways on 951/951 observed live ticks)."
+        ),
+    )
+    p.add_argument(
         "--min-rr",
         type=float,
         default=0.0,
@@ -301,6 +326,29 @@ def _parse_date_utc(s: str) -> datetime:
     return dt
 
 
+def _parse_reduced_days(raw: str) -> tuple[int, ...]:
+    """``"0,4"`` -> ``(0, 4)``. Empty / blank -> ``()``.
+
+    Raises ValueError on anything that is not a weekday number so a typo fails
+    the run instead of silently disabling the gate mid-sweep.
+    """
+    if not raw or not raw.strip():
+        return ()
+    days: list[int] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            day = int(part)
+        except ValueError:
+            raise ValueError(f"--reduced-days: {part!r} is not an integer") from None
+        if not 0 <= day <= 6:
+            raise ValueError(f"--reduced-days: {day} out of range (Mon=0..Sun=6)")
+        days.append(day)
+    return tuple(sorted(set(days)))
+
+
 def _print_config_summary(
     params: BacktestParams, start: datetime, end: datetime, data_path: Path
 ) -> None:
@@ -322,6 +370,8 @@ def _print_config_summary(
               f"(period {params.regime_atr_period})")
     if params.min_rr > 0:
         print(f"  min_rr_floor      : {params.min_rr}")
+    print(f"  chop_gate         : {'ON (live parity)' if params.chop_gate else 'off'}")
+    print(f"  reduced_days      : {list(params.reduced_days) or 'off'}")
     print("=" * 70)
 
 
@@ -421,6 +471,8 @@ def main(argv: list[str] | None = None) -> int:
         regime_atr_period=args.regime_atr_period,
         regime_block_setup=tuple(args.regime_block_setup),
         min_rr=args.min_rr,
+        chop_gate=args.chop_gate,
+        reduced_days=_parse_reduced_days(args.reduced_days),
     )
 
     _print_config_summary(params, start, end, data_path)
@@ -436,6 +488,17 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.min_rr and args.min_rr > 0:
         logger.info("Min-RR floor ON: drop zones with planned RR < {}", args.min_rr)
+    if args.chop_gate:
+        logger.info(
+            "CHOP gate ON (live parity): skip cycles where H4+H1 are sideways "
+            "and H4 has no CHoCH"
+        )
+    if params.reduced_days:
+        logger.info(
+            "Reduced-day rule ON (live parity): weekdays {} take SNIPER only "
+            "(no D1 data -> SNIPER unreachable -> all cycles on those days drop)",
+            list(params.reduced_days),
+        )
 
     logger.info("Starting backtest run ({} -> {})", start.date(), end.date())
     arts = run_backtest(
@@ -453,6 +516,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  trades_csv    : {args.dump_trades} ({n} rows)")
 
     _print_summary(result, broker_summary, perf_report)
+
+    if args.chop_gate or params.reduced_days:
+        seen = arts.cycles_seen or 1
+        if args.chop_gate:
+            print(f"  chop_skipped  : {arts.cycles_chop_skipped}/{arts.cycles_seen} "
+                  f"cycles ({100.0 * arts.cycles_chop_skipped / seen:.1f}%)")
+        if params.reduced_days:
+            print(f"  rday_skipped  : {arts.cycles_reduced_day_skipped}/"
+                  f"{arts.cycles_seen} cycles "
+                  f"({100.0 * arts.cycles_reduced_day_skipped / seen:.1f}%)")
 
     out_path = _save_result(result, Path(args.report_path), perf_report)
     print(f"  report_json   : {out_path}")

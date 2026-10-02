@@ -26,8 +26,13 @@ from loguru import logger
 from apps.api.src.agents.trader.analysis.ict import ICTAnalysis
 from apps.api.src.agents.trader.core.data import HistoricalDataManager
 from apps.api.src.agents.trader.engine import zone_finder
-from apps.api.src.agents.trader.engine.regime import RegimeGate
+from apps.api.src.agents.trader.engine.regime import (
+    CHOP,
+    RegimeGate,
+    structure_regime_from_ict,
+)
 from apps.api.src.agents.trader.engine.signals import Signal
+from apps.api.src.agents.trader.specialist.htf_bias import is_sniper_aligned
 
 
 # ── Helpers (pure functions; testable in isolation) ──────────────────────────
@@ -152,6 +157,8 @@ class ICTAnalyst:
         blocked_setups: set[str] | frozenset[str] | None = None,
         regime: RegimeGate | None = None,
         min_rr: float = 0.0,
+        chop_gate: bool = False,
+        reduced_days: tuple[int, ...] | None = None,
     ) -> None:
         self.clock = clock
         self.data = data
@@ -174,6 +181,25 @@ class ICTAnalyst:
         # v4: high-volatility regime gate. None / disabled gate = no-op, so the
         # analyst reproduces v3 unless a gate is explicitly passed.
         self.regime = regime
+        # Live-parity structural CHOP gate (agent.py:900). OFF by default so
+        # every existing backtest reproduces byte-for-byte; turn it on to
+        # measure what the live-only skip costs. See engine.regime.CHOP.
+        self.chop_gate = bool(chop_gate)
+        # Live-parity reduced-day rule (agent.py:1057): on these weekdays
+        # (Mon=0..Sun=6) the live trader takes SNIPER setups only, and FLOW
+        # cycles are dropped outright. Empty by default = no-op.
+        #
+        # NB the backtest loads no D1 parquet, so d1_trend is always "sideways"
+        # and SNIPER (D1+H4 aligned) can never trigger — with this on, EVERY
+        # cycle on a listed weekday is dropped. That is not a modelling
+        # shortcut: the live log shows D1 sideways on 951/951 ticks, i.e. the
+        # live bot is in the same permanent-FLOW state.
+        self.reduced_days = tuple(reduced_days or ())
+        # Diagnostics: cycles seen / skipped per gate. Read after a run to
+        # report block rates instead of inferring them from trade counts.
+        self.cycles_seen = 0
+        self.cycles_chop_skipped = 0
+        self.cycles_reduced_day_skipped = 0
         self.ict = ICTAnalysis()
         self._emitted_zone_keys: set[tuple] = set()
         # Perf: memoize per-TF ICT analysis keyed by the last-closed bar
@@ -238,9 +264,31 @@ class ICTAnalyst:
                 self._analysis_cache[tf] = (last_ts, sig, atr)
                 ict_map[tf], atr_map[tf] = sig, atr
 
+        # 2b. Live-parity CHOP gate (port of agent.py:898-904). The live trader
+        #     abandons the whole tick when H4+H1 structure reads "chop"; the
+        #     backtest had no equivalent, so v5rr measured a strategy the live
+        #     bot was not running. Counted before the bias check so the block
+        #     rate here is comparable to the live log's.
+        self.cycles_seen += 1
+        if self.chop_gate:
+            structural = structure_regime_from_ict(
+                ict_map.get("H4"), ict_map.get("H1")
+            )
+            if structural == CHOP:
+                self.cycles_chop_skipped += 1
+                return []
+
         # 3. HTF bias (D1 primary, H4 fallback — whichever is loaded)
         d1_trend = ict_map.get("D1").structure.get("trend", "sideways") if "D1" in ict_map else "sideways"
         h4_trend = ict_map.get("H4").structure.get("trend", "sideways") if "H4" in ict_map else "sideways"
+        # 3b. Live-parity reduced-day rule (port of agent.py:1057-1061). On
+        #     Mon/Fri the live trader skips both directions unless the mode is
+        #     SNIPER, which needs D1+H4 aligned.
+        if self.reduced_days and now.weekday() in self.reduced_days:
+            if not is_sniper_aligned(d1_trend, h4_trend):
+                self.cycles_reduced_day_skipped += 1
+                return []
+
         want_dir = _bias_from_trends(d1_trend, h4_trend)
         if want_dir is None:
             return []
